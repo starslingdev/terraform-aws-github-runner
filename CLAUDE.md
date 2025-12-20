@@ -67,12 +67,27 @@ pre-commit run --all-files        # Run all hooks manually
 4. Runner registers with GitHub, executes job, self-terminates (ephemeral)
 5. Scale-down Lambda runs on schedule, terminates idle non-ephemeral runners
 
-## Development Requirements
+## Development Setup
 
+### Prerequisites
 - Terraform >= 1.3.0
 - Node.js with Yarn 4.x (see `packageManager` in `lambdas/package.json`)
-- Pre-commit hooks: tflint, terraform_fmt
-- AWS provider >= 6.21
+- tflint (`brew install tflint`)
+- pre-commit (`uv tool install pre-commit`)
+
+### First-time Setup
+```bash
+# 1. Initialize Terraform (required before pre-commit hooks work)
+terraform init
+
+# 2. Install pre-commit hooks
+pre-commit install
+
+# 3. Install Lambda dependencies
+cd lambdas && yarn install && cd ..
+```
+
+**Note:** `terraform init` must be run before pre-commit hooks because tflint requires initialized modules.
 
 ## Key Configuration Patterns
 
