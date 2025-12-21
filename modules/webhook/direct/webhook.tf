@@ -17,22 +17,18 @@ resource "aws_lambda_function" "webhook" {
   architectures     = [var.config.lambda_architecture]
 
   environment {
-    variables = merge(
-      {
-        for k, v in {
-          LOG_LEVEL                                = var.config.log_level
-          POWERTOOLS_LOGGER_LOG_EVENT              = var.config.log_level == "debug" ? "true" : "false"
-          POWERTOOLS_TRACE_ENABLED                 = var.config.tracing_config.mode != null ? true : false
-          POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.config.tracing_config.capture_http_requests
-          POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
-          PARAMETER_GITHUB_APP_WEBHOOK_SECRET      = var.config.github_app_parameters.webhook_secret.name
-          REPOSITORY_ALLOW_LIST                    = jsonencode(var.config.repository_white_list)
-          PARAMETER_RUNNER_MATCHER_CONFIG_PATH     = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
-          PARAMETER_RUNNER_MATCHER_VERSION         = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.version]) # enforce cold start after Changes in SSM parameter
-        } : k => v if v != null
-      },
-      var.config.lambda_environment_variables
-    )
+    variables = {
+      LOG_LEVEL                                = var.config.log_level
+      POWERTOOLS_LOGGER_LOG_EVENT              = var.config.log_level == "debug" ? "true" : "false"
+      POWERTOOLS_TRACE_ENABLED                 = var.config.tracing_config.mode != null ? true : false
+      POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.config.tracing_config.capture_http_requests
+      POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
+      PARAMETER_GITHUB_APP_WEBHOOK_SECRET      = var.config.github_app_parameters.webhook_secret.name
+      REPOSITORY_ALLOW_LIST                    = jsonencode(var.config.repository_white_list)
+      PARAMETER_RUNNER_MATCHER_CONFIG_PATH     = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
+      PARAMETER_RUNNER_MATCHER_VERSION         = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.version]) # enforce cold start after Changes in SSM parameter
+      TENANT_TABLE_NAME                        = var.config.tenant_table_name
+    }
   }
 
   dynamic "vpc_config" {

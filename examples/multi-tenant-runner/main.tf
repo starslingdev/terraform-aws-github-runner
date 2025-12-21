@@ -29,6 +29,10 @@ module "runners" {
   prefix     = local.environment
   aws_region = local.aws_region
 
+  # VPC configuration for runner instances
+  vpc_id     = module.base.vpc.vpc_id
+  subnet_ids = module.base.vpc.private_subnets
+
   github_app = {
     key_base64     = var.github_app.key_base64
     id             = var.github_app.id
@@ -65,6 +69,9 @@ module "runners" {
     enable        = true
     accept_events = ["workflow_job", "installation"]
   }
+
+  # Create the service-linked role for spot instances (first deployment only)
+  create_service_linked_role_spot = true
 
   tags = {
     Project     = "multi-tenant-runners"

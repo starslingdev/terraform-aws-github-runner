@@ -32,3 +32,27 @@ output "queues" {
     }
   }
 }
+
+output "runners" {
+  description = "Runner infrastructure for each tier"
+  value = {
+    for tier, runner in module.runners : tier => {
+      launch_template   = runner.launch_template
+      lambda_scale_up   = runner.lambda_scale_up
+      lambda_scale_down = runner.lambda_scale_down
+      role_runner       = runner.role_runner
+      role_scale_up     = runner.role_scale_up
+      role_scale_down   = runner.role_scale_down
+    }
+  }
+}
+
+output "runner_binaries" {
+  description = "S3 buckets for runner binaries by OS/architecture"
+  value = {
+    for key, syncer in module.runner_binaries : key => {
+      bucket_id  = syncer.bucket.id
+      bucket_arn = syncer.bucket.arn
+    }
+  }
+}

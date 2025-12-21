@@ -215,8 +215,8 @@ EOF
   })
 }
 
-variable "lambda_environment_variables" {
-  description = "Additional environment variables for the Lambda function."
-  type        = map(string)
-  default     = {}
+variable "tenant_table_name" {
+  description = "DynamoDB table name for multi-tenant configuration. When set, enables tenant validation in the webhook."
+  type        = string
+  default     = null
 }

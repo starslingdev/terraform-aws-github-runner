@@ -46,6 +46,6 @@ variable "config" {
       arn     = string
       version = string
     }))
-    lambda_environment_variables = optional(map(string), {})
+    tenant_table_name = optional(string)
   })
 }

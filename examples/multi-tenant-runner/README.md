@@ -340,4 +340,6 @@ Note: This will terminate all running runners and delete the tenant registry.
 | tenant_table | DynamoDB table details for tenant registry |
 | runner_tiers | Configured runner tiers |
 | queues | SQS queues for each tier |
+| runners | Runner infrastructure for each tier |
+| runner_binaries | S3 buckets for runner binaries |
 <!-- END_TF_DOCS -->

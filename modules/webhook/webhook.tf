@@ -85,7 +85,7 @@ module "direct" {
         version = p.version
       }
     ]
-    lambda_environment_variables = var.lambda_environment_variables
+    tenant_table_name = var.tenant_table_name
   }
 }
 
@@ -127,8 +127,8 @@ module "eventbridge" {
         version = p.version
       }
     ]
-    accept_events                = var.eventbridge.accept_events
-    lambda_environment_variables = var.lambda_environment_variables
+    accept_events     = var.eventbridge.accept_events
+    tenant_table_name = var.tenant_table_name
   }
 
 }

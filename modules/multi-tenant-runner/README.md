@@ -303,6 +303,8 @@ Enable these as cost allocation tags in AWS Cost Explorer for per-tenant billing
 |------|--------|---------|
 | ssm | ../ssm | n/a |
 | webhook | ../webhook | n/a |
+| runners | ../runners | n/a |
+| runner_binaries | ../runner-binaries-syncer | n/a |
 
 ## Resources
 
@@ -314,6 +316,7 @@ Enable these as cost allocation tags in AWS Cost Explorer for per-tenant billing
 | aws_lambda_function.tenant_manager | resource |
 | aws_cloudwatch_event_rule.installation | resource |
 | aws_cloudwatch_event_target.tenant_manager | resource |
+| aws_iam_role_policy.scale_up_tenant_dynamodb | resource |
 
 ## Inputs
 
@@ -321,11 +324,13 @@ Enable these as cost allocation tags in AWS Cost Explorer for per-tenant billing
 |------|-------------|------|---------|:--------:|
 | prefix | Prefix for all resources | `string` | n/a | yes |
 | aws_region | AWS region | `string` | n/a | yes |
-| vpc_id | VPC ID for runners | `string` | n/a | yes |
-| subnet_ids | Subnet IDs for runners | `list(string)` | n/a | yes |
+| vpc_id | VPC ID for runner instances | `string` | n/a | yes |
+| subnet_ids | Subnet IDs for runner instances | `list(string)` | n/a | yes |
 | github_app | GitHub App configuration | `object` | n/a | yes |
 | runner_tiers | Fixed runner tier definitions | `map(object)` | See defaults | no |
 | eventbridge | EventBridge configuration | `object` | `{ enable = true, accept_events = ["workflow_job", "installation"] }` | no |
+| enable_ephemeral_runners | Enable ephemeral runners (terminate after job) | `bool` | `true` | no |
+| instance_target_capacity_type | Default lifecycle: 'spot' or 'on-demand' | `string` | `"spot"` | no |
 | tags | Tags to apply to all resources | `map(string)` | `{}` | no |
 
 ## Outputs
@@ -336,4 +341,6 @@ Enable these as cost allocation tags in AWS Cost Explorer for per-tenant billing
 | webhook | Webhook endpoint configuration |
 | runner_tiers | Configured runner tiers |
 | queues | SQS queues for runner tiers |
+| runners | Runner infrastructure for each tier (launch templates, lambdas, roles) |
+| runner_binaries | S3 buckets for runner binaries by OS/architecture |
 <!-- END_TF_DOCS -->

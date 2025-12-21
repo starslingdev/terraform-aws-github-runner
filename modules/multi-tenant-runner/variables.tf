@@ -160,3 +160,60 @@ variable "logging_kms_key_id" {
   type        = string
   default     = null
 }
+
+# Runner infrastructure variables
+variable "vpc_id" {
+  description = "The VPC ID for runner instances and security groups"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "List of subnet IDs where runner instances will be launched"
+  type        = list(string)
+}
+
+variable "runners_lambda_zip" {
+  description = "Path to the runners Lambda zip file (control-plane)"
+  type        = string
+  default     = null
+}
+
+variable "runner_binaries_syncer_lambda_zip" {
+  description = "Path to the runner-binaries-syncer Lambda zip file"
+  type        = string
+  default     = null
+}
+
+variable "enable_ephemeral_runners" {
+  description = "Enable ephemeral runners. Runners will be terminated after each job."
+  type        = bool
+  default     = true
+}
+
+variable "enable_ssm_on_runners" {
+  description = "Enable SSM access on runner instances for debugging"
+  type        = bool
+  default     = false
+}
+
+variable "instance_target_capacity_type" {
+  description = "Default lifecycle for runner instances: 'spot' or 'on-demand'"
+  type        = string
+  default     = "spot"
+  validation {
+    condition     = contains(["spot", "on-demand"], var.instance_target_capacity_type)
+    error_message = "Valid values are 'spot' or 'on-demand'."
+  }
+}
+
+variable "create_service_linked_role_spot" {
+  description = "Create the service-linked role for EC2 Spot. Required for first deployment in an account."
+  type        = bool
+  default     = false
+}
+
+variable "scale_down_schedule_expression" {
+  description = "Cron expression for scale-down schedule"
+  type        = string
+  default     = "cron(*/5 * * * ? *)"
+}
