@@ -1,5 +1,7 @@
 # Tenant Manager Lambda - handles GitHub App installation events
 
+data "aws_caller_identity" "current" {}
+
 locals {
   tenant_manager_lambda_zip = var.tenant_manager_lambda_zip == null ? "${path.module}/../../lambdas/functions/tenant-manager/tenant-manager.zip" : var.tenant_manager_lambda_zip
 }
@@ -85,7 +87,7 @@ resource "aws_iam_role_policy" "tenant_manager_ssm" {
           "ssm:GetParameters"
         ]
         Resource = [
-          "arn:${var.aws_partition}:ssm:${var.aws_region}:*:parameter${local.ssm_root_path}/*"
+          "arn:${var.aws_partition}:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_root_path}/*"
         ]
       }
     ]

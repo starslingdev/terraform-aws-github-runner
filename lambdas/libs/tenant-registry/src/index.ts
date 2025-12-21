@@ -259,8 +259,8 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
 
   const tenant = await getTenant(installationId);
   if (tenant) {
-    // Evict oldest entries if cache is full
-    if (tenantCache.size >= MAX_CACHE_SIZE) {
+    // Evict oldest entry if cache is full and this is a new key
+    if (tenantCache.size >= MAX_CACHE_SIZE && !tenantCache.has(installationId)) {
       const oldestKey = tenantCache.keys().next().value;
       if (oldestKey !== undefined) tenantCache.delete(oldestKey);
     }
