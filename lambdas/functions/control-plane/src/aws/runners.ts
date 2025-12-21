@@ -37,6 +37,23 @@ export async function listEC2Runners(
   return runners;
 }
 
+export async function countRunnersByTenant(filters: Runners.ListRunnersByTenantFilters): Promise<number> {
+  const ec2Statuses = filters.statuses || ['running', 'pending'];
+  const ec2Filters: Ec2Filter[] = [
+    { Name: 'instance-state-name', Values: ec2Statuses },
+    { Name: 'tag:ghr:Application', Values: ['github-action-runner'] },
+    { Name: 'tag:ghr:tenant_id', Values: [filters.tenantId] },
+  ];
+
+  if (filters.environment) {
+    ec2Filters.push({ Name: 'tag:ghr:environment', Values: [filters.environment] });
+  }
+
+  const runners = await getRunners(ec2Filters);
+  logger.debug(`Found ${runners.length} runners for tenant ${filters.tenantId}`);
+  return runners.length;
+}
+
 function constructFilters(filters?: Runners.ListRunnerFilters): Ec2Filter[][] {
   const ec2Statuses = filters?.statuses ? filters.statuses : ['running', 'pending'];
   const ec2Filters: Ec2Filter[][] = [];
@@ -255,6 +272,14 @@ async function createInstances(
     { Key: 'ghr:Type', Value: runnerParameters.runnerType },
     { Key: 'ghr:Owner', Value: runnerParameters.runnerOwner },
   ];
+
+  // Add tenant tags if present (multi-tenant mode)
+  if (runnerParameters.tenantId) {
+    tags.push({ Key: 'ghr:tenant_id', Value: runnerParameters.tenantId });
+  }
+  if (runnerParameters.tenantTier) {
+    tags.push({ Key: 'ghr:tenant_tier', Value: runnerParameters.tenantTier });
+  }
 
   if (runnerParameters.tracingEnabled) {
     const traceId = tracer.getRootXrayTraceId();

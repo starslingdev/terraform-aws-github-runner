@@ -4,9 +4,10 @@ import { getParameter, putParameter } from '@aws-github-runner/aws-ssm-util';
 import yn from 'yn';
 
 import { createGithubAppAuth, createGithubInstallationAuth, createOctokitClient } from '../github/auth';
-import { createRunner, listEC2Runners, tag } from './../aws/runners';
+import { createRunner, listEC2Runners, countRunnersByTenant, tag } from './../aws/runners';
 import { RunnerInputParameters } from './../aws/runners.d';
 import { metricGitHubAppRateLimit } from '../github/rate-limit';
+import { getTenantConfig } from './tenant';
 
 const logger = createChildLogger('scale-up');
 
@@ -29,6 +30,8 @@ export interface ActionRequestMessage {
   installationId: number;
   repoOwnerType: string;
   retryCounter?: number;
+  tenantId?: string;
+  tenantTier?: string;
 }
 
 export interface ActionRequestMessageSQS extends ActionRequestMessage {
@@ -62,6 +65,8 @@ interface CreateEC2RunnerConfig {
   amiIdSsmParameterName?: string;
   tracingEnabled?: boolean;
   onDemandFailoverOnError?: string[];
+  tenantId?: string;
+  tenantTier?: string;
 }
 
 function generateRunnerServiceConfig(githubRunnerConfig: CreateGitHubRunnerConfig, token: string) {
@@ -219,6 +224,8 @@ export async function createRunners(
     runnerOwner: githubRunnerConfig.runnerOwner,
     numberOfRunners,
     ...ec2RunnerConfig,
+    tenantId: ec2RunnerConfig.tenantId,
+    tenantTier: ec2RunnerConfig.tenantTier,
   });
   if (instances.length !== 0) {
     await createStartRunnerConfig(githubRunnerConfig, instances, ghClient);
@@ -300,7 +307,10 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       continue;
     }
 
-    const key = enableOrgLevel ? payload.repositoryOwner : `${payload.repositoryOwner}/${payload.repositoryName}`;
+    // Include tenantId in the grouping key to ensure different tenants are processed separately
+    // This prevents messages from different tenants being grouped together when using the same org/repo
+    const baseKey = enableOrgLevel ? payload.repositoryOwner : `${payload.repositoryOwner}/${payload.repositoryName}`;
+    const key = payload.tenantId ? `${baseKey}:tenant:${payload.tenantId}` : baseKey;
 
     let entry = validMessages.get(key);
 
@@ -373,8 +383,13 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       maximumRunners,
     });
 
+    // Get tenant info from first message BEFORE any array mutations
+    // All messages in a group have the same tenant (enforced by grouping key including tenantId)
+    const tenantId = messages[0]?.tenantId;
+    const tenantTier = messages[0]?.tenantTier;
+
     // Calculate how many runners we want to create.
-    const newRunners =
+    let newRunners =
       maximumRunners === -1
         ? // If we don't have an upper limit, scale up by the number of new jobs.
           scaleUp
@@ -404,6 +419,40 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       newRunners,
     });
 
+    // Check tenant limits if in multi-tenant mode
+    if (tenantId) {
+      const tenant = await getTenantConfig(tenantId);
+      if (tenant) {
+        const currentTenantRunners = await countRunnersByTenant({ tenantId, environment });
+        const tenantMaxRunners = tenant.max_runners;
+        const tenantAvailableSlots = Math.max(0, tenantMaxRunners - currentTenantRunners);
+
+        if (tenantAvailableSlots === 0) {
+          logger.warn('Tenant at runner limit', {
+            tenantId,
+            orgName: tenant.org_name,
+            currentRunners: currentTenantRunners,
+            maxRunners: tenantMaxRunners,
+          });
+          invalidMessages.push(...messages.map(({ messageId }) => messageId));
+          continue;
+        }
+
+        // Further limit newRunners by tenant quota
+        if (newRunners > tenantAvailableSlots) {
+          logger.warn('Limiting runners to tenant quota', {
+            tenantId,
+            orgName: tenant.org_name,
+            requested: newRunners,
+            available: tenantAvailableSlots,
+          });
+          const excessCount = newRunners - tenantAvailableSlots;
+          invalidMessages.push(...messages.slice(0, excessCount).map(({ messageId }) => messageId));
+          newRunners = tenantAvailableSlots;
+        }
+      }
+    }
+
     const instances = await createRunners(
       {
         ephemeral: ephemeralEnabled,
@@ -431,6 +480,8 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
         amiIdSsmParameterName,
         tracingEnabled,
         onDemandFailoverOnError,
+        tenantId,
+        tenantTier,
       },
       newRunners,
       githubInstallationClient,

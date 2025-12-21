@@ -1,0 +1,119 @@
+variable "prefix" {
+  description = "Prefix for all resources"
+  type        = string
+}
+
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+}
+
+variable "aws_partition" {
+  description = "AWS partition (aws, aws-cn, aws-us-gov)"
+  type        = string
+  default     = "aws"
+}
+
+variable "enable_point_in_time_recovery" {
+  description = "Enable point-in-time recovery for DynamoDB table"
+  type        = bool
+  default     = true
+}
+
+variable "github_app" {
+  description = "GitHub App configuration"
+  type = object({
+    id                 = optional(string)
+    key_base64         = optional(string)
+    webhook_secret     = optional(string)
+    id_ssm             = optional(object({ arn = string, name = string }))
+    key_base64_ssm     = optional(object({ arn = string, name = string }))
+    webhook_secret_ssm = optional(object({ arn = string, name = string }))
+  })
+}
+
+variable "runner_tiers" {
+  description = "Fixed runner tier definitions"
+  type = map(object({
+    runner_os           = string
+    runner_architecture = string
+    instance_types      = list(string)
+    max_runners         = number
+    labels              = list(string)
+  }))
+  default = {
+    small = {
+      runner_os           = "linux"
+      runner_architecture = "x64"
+      instance_types      = ["t3.medium"]
+      max_runners         = 2
+      labels              = ["self-hosted", "linux", "x64", "small"]
+    }
+    medium = {
+      runner_os           = "linux"
+      runner_architecture = "x64"
+      instance_types      = ["t3.large", "m5.large"]
+      max_runners         = 5
+      labels              = ["self-hosted", "linux", "x64", "medium"]
+    }
+    large = {
+      runner_os           = "linux"
+      runner_architecture = "x64"
+      instance_types      = ["t3.xlarge", "m5.xlarge"]
+      max_runners         = 10
+      labels              = ["self-hosted", "linux", "x64", "large"]
+    }
+  }
+}
+
+variable "ssm_paths" {
+  description = "SSM parameter paths"
+  type = object({
+    root = string
+  })
+  default = {
+    root = "github-action-runners"
+  }
+}
+
+variable "eventbridge" {
+  description = "EventBridge configuration"
+  type = object({
+    enable        = bool
+    accept_events = list(string)
+  })
+  default = {
+    enable        = true
+    accept_events = ["workflow_job", "installation"]
+  }
+}
+
+variable "lambda_timeout" {
+  description = "Lambda timeout in seconds"
+  type        = number
+  default     = 60
+}
+
+variable "log_level" {
+  description = "Lambda log level"
+  type        = string
+  default     = "info"
+}
+
+variable "tenant_manager_lambda_zip" {
+  description = "Path to tenant-manager Lambda zip file"
+  type        = string
+  default     = null
+}
+
+variable "webhook_lambda_zip" {
+  description = "Path to webhook Lambda zip file"
+  type        = string
+  default     = null
+}

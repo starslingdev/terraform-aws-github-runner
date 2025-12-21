@@ -6,10 +6,11 @@ import nock from 'nock';
 import { performance } from 'perf_hooks';
 
 import * as ghAuth from '../github/auth';
-import { createRunner, listEC2Runners } from './../aws/runners';
+import { createRunner, listEC2Runners, countRunnersByTenant } from './../aws/runners';
 import { RunnerInputParameters } from './../aws/runners.d';
 import * as scaleUpModule from './scale-up';
 import { getParameter } from '@aws-github-runner/aws-ssm-util';
+import { getTenantConfig, clearTenantCache } from './tenant';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Octokit } from '@octokit/rest';
 
@@ -31,6 +32,8 @@ const mockOctokit = {
 
 const mockCreateRunner = vi.mocked(createRunner);
 const mockListRunners = vi.mocked(listEC2Runners);
+const mockCountRunnersByTenant = vi.mocked(countRunnersByTenant);
+const mockGetTenantConfig = vi.mocked(getTenantConfig);
 const mockSSMClient = mockClient(SSMClient);
 const mockSSMgetParameter = vi.mocked(getParameter);
 
@@ -43,7 +46,13 @@ vi.mock('@octokit/rest', () => ({
 vi.mock('./../aws/runners', async () => ({
   createRunner: vi.fn(),
   listEC2Runners: vi.fn(),
+  countRunnersByTenant: vi.fn(),
   tag: vi.fn(),
+}));
+
+vi.mock('./tenant', async () => ({
+  getTenantConfig: vi.fn(),
+  clearTenantCache: vi.fn(),
 }));
 
 vi.mock('./../github/auth', async () => ({
@@ -1664,6 +1673,276 @@ describe('scaleUp with Github Data Residency', () => {
         }),
       );
     });
+  });
+});
+
+describe('Multi-tenant quota enforcement', () => {
+  beforeEach(() => {
+    process.env.ENABLE_ORGANIZATION_RUNNERS = 'true';
+    process.env.ENABLE_EPHEMERAL_RUNNERS = 'true';
+    process.env.ENABLE_JOB_QUEUED_CHECK = 'false';
+    process.env.RUNNERS_MAXIMUM_COUNT = '100'; // High global limit to not interfere with tenant limits
+    process.env.RUNNER_NAME_PREFIX = 'unit-test-';
+    process.env.RUNNER_GROUP_NAME = 'Default';
+    process.env.SSM_CONFIG_PATH = '/github-action-runners/default/runners/config';
+    process.env.SSM_TOKEN_PATH = '/github-action-runners/default/runners/config';
+    process.env.RUNNER_LABELS = 'label1,label2';
+
+    mockListRunners.mockResolvedValue([]);
+    mockCountRunnersByTenant.mockResolvedValue(0);
+    mockGetTenantConfig.mockResolvedValue(null);
+  });
+
+  const createTenantMessages = (
+    count: number,
+    tenantId: string,
+    tenantTier: string,
+    overrides: Partial<scaleUpModule.ActionRequestMessageSQS> = {},
+  ): scaleUpModule.ActionRequestMessageSQS[] => {
+    return Array.from({ length: count }, (_, i) => ({
+      id: i + 1,
+      eventType: 'workflow_job' as const,
+      repositoryName: 'hello-world',
+      repositoryOwner: 'TestOrg',
+      installationId: 12345,
+      repoOwnerType: 'Organization',
+      messageId: `tenant-message-${i}`,
+      tenantId,
+      tenantTier,
+      ...overrides,
+    }));
+  };
+
+  it('should pass tenant info to createRunner when tenant quota allows all runners', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'medium';
+    const messages = createTenantMessages(2, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 12345,
+      org_name: 'TestOrg',
+      org_type: 'Organization',
+      status: 'active',
+      tier: 'medium',
+      max_runners: 5,
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(0);
+
+    await scaleUpModule.scaleUp(messages);
+
+    expect(createRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        tenantTier,
+        numberOfRunners: 2,
+      }),
+    );
+  });
+
+  it('should limit runners based on tenant quota', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(5, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 12345,
+      org_name: 'TestOrg',
+      org_type: 'Organization',
+      status: 'active',
+      tier: 'small',
+      max_runners: 2,
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(1); // 1 runner already running
+
+    const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+    // Only 1 slot available (max 2 - current 1)
+    expect(createRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        tenantTier,
+        numberOfRunners: 1,
+      }),
+    );
+    // 4 messages should be rejected (5 requested - 1 allowed)
+    expect(invalidMessages.length).toBe(4);
+  });
+
+  it('should reject all messages when tenant is at runner limit', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(3, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 12345,
+      org_name: 'TestOrg',
+      org_type: 'Organization',
+      status: 'active',
+      tier: 'small',
+      max_runners: 2,
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(2); // Already at max
+
+    const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+    expect(createRunner).not.toHaveBeenCalled();
+    expect(invalidMessages).toHaveLength(3);
+  });
+
+  // BUG 1 REGRESSION TEST: Ensure tenant info is captured BEFORE splice() operation
+  it('should preserve tenant info when messages are spliced due to global max runners', async () => {
+    process.env.RUNNERS_MAXIMUM_COUNT = '2'; // Low global limit
+    const tenantId = '12345';
+    const tenantTier = 'medium';
+    // Create 5 messages, but only 2 will be allowed due to global limit
+    // This triggers splice() which previously would lose tenant info if extracted after splice
+    const messages = createTenantMessages(5, tenantId, tenantTier);
+
+    mockListRunners.mockResolvedValue([
+      { instanceId: 'i-existing', launchTime: new Date(), type: 'Org', owner: 'TestOrg' },
+    ]); // 1 runner already exists
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 12345,
+      org_name: 'TestOrg',
+      org_type: 'Organization',
+      status: 'active',
+      tier: 'medium',
+      max_runners: 10, // High tenant limit - not the bottleneck
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(1);
+
+    await scaleUpModule.scaleUp(messages);
+
+    // Key assertion: tenantId and tenantTier should still be passed correctly
+    // even though messages array was mutated by splice()
+    expect(createRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        tenantTier,
+      }),
+    );
+  });
+
+  // BUG 2 REGRESSION TEST: Ensure different tenants are grouped separately
+  it('should process messages from different tenants separately', async () => {
+    const tenant1Messages = createTenantMessages(2, 'tenant-1', 'small', {
+      repositoryOwner: 'SharedOrg',
+    });
+    const tenant2Messages = createTenantMessages(2, 'tenant-2', 'medium', {
+      repositoryOwner: 'SharedOrg',
+    });
+
+    // Interleave messages from both tenants (same org, different tenants)
+    const messages = [
+      { ...tenant1Messages[0], messageId: 't1-msg-0' },
+      { ...tenant2Messages[0], messageId: 't2-msg-0' },
+      { ...tenant1Messages[1], messageId: 't1-msg-1' },
+      { ...tenant2Messages[1], messageId: 't2-msg-1' },
+    ];
+
+    mockGetTenantConfig.mockImplementation(async (tenantId: string) => {
+      if (tenantId === 'tenant-1') {
+        return {
+          installation_id: 1,
+          org_name: 'SharedOrg',
+          org_type: 'Organization' as const,
+          status: 'active' as const,
+          tier: 'small' as const,
+          max_runners: 2,
+          created_at: '2024-01-01T00:00:00.000Z',
+          updated_at: '2024-01-01T00:00:00.000Z',
+        };
+      } else if (tenantId === 'tenant-2') {
+        return {
+          installation_id: 2,
+          org_name: 'SharedOrg',
+          org_type: 'Organization' as const,
+          status: 'active' as const,
+          tier: 'medium' as const,
+          max_runners: 5,
+          created_at: '2024-01-01T00:00:00.000Z',
+          updated_at: '2024-01-01T00:00:00.000Z',
+        };
+      }
+      return null;
+    });
+    mockCountRunnersByTenant.mockResolvedValue(0);
+
+    await scaleUpModule.scaleUp(messages);
+
+    // Should have been called twice - once for each tenant group
+    expect(createRunner).toHaveBeenCalledTimes(2);
+
+    // Verify tenant-1 call has correct tenantId
+    expect(createRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-1',
+        tenantTier: 'small',
+      }),
+    );
+
+    // Verify tenant-2 call has correct tenantId
+    expect(createRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-2',
+        tenantTier: 'medium',
+      }),
+    );
+  });
+
+  it('should not group messages without tenantId with tenant messages', async () => {
+    // Mix of tenant and non-tenant messages for same org
+    const tenantMessages = createTenantMessages(2, 'tenant-1', 'small', {
+      repositoryOwner: 'SharedOrg',
+    });
+    const nonTenantMessages: scaleUpModule.ActionRequestMessageSQS[] = [
+      {
+        id: 100,
+        eventType: 'workflow_job',
+        repositoryName: 'hello-world',
+        repositoryOwner: 'SharedOrg',
+        installationId: 12345,
+        repoOwnerType: 'Organization',
+        messageId: 'non-tenant-msg',
+        // No tenantId or tenantTier
+      },
+    ];
+
+    const messages = [...tenantMessages, ...nonTenantMessages];
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 1,
+      org_name: 'SharedOrg',
+      org_type: 'Organization',
+      status: 'active',
+      tier: 'small',
+      max_runners: 2,
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(0);
+
+    await scaleUpModule.scaleUp(messages);
+
+    // Should have been called twice - once for tenant group, once for non-tenant
+    expect(createRunner).toHaveBeenCalledTimes(2);
+
+    // Verify one call has tenantId and one doesn't
+    const calls = mockCreateRunner.mock.calls;
+    const tenantCall = calls.find((call) => call[0].tenantId === 'tenant-1');
+    const nonTenantCall = calls.find((call) => !call[0].tenantId);
+
+    expect(tenantCall).toBeDefined();
+    expect(nonTenantCall).toBeDefined();
   });
 });
 

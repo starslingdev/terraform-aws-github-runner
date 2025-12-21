@@ -1,0 +1,35 @@
+{
+  "name": "@aws-github-runner/tenant-registry",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "NODE_ENV=test nx test",
+    "test:watch": "NODE_ENV=test nx test --watch",
+    "lint": "eslint src",
+    "format": "prettier --write \"**/*.ts\"",
+    "format-check": "prettier --check \"**/*.ts\"",
+    "all": "yarn build && yarn format && yarn lint && yarn test"
+  },
+  "devDependencies": {
+    "@aws-sdk/types": "^3.936.0",
+    "@types/aws-lambda": "^8.10.155",
+    "@types/node": "^22.19.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "aws-sdk-client-mock-jest": "^4.1.0"
+  },
+  "dependencies": {
+    "@aws-github-runner/aws-powertools-util": "*",
+    "@aws-sdk/client-dynamodb": "^3.948.0",
+    "@aws-sdk/lib-dynamodb": "^3.948.0"
+  },
+  "nx": {
+    "includedScripts": [
+      "format",
+      "format-check",
+      "lint",
+      "all"
+    ]
+  }
+}
