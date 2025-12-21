@@ -88,3 +88,8 @@ output "runner_tiers" {
 output "queues" {
   value = module.runners.queues
 }
+
+output "webhook_secret" {
+  value     = random_id.random.hex
+  sensitive = true
+}

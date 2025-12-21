@@ -1,5 +1,9 @@
 # Tenant Manager Lambda - handles GitHub App installation events
 
+locals {
+  tenant_manager_lambda_zip = var.tenant_manager_lambda_zip == null ? "${path.module}/../../lambdas/functions/tenant-manager/tenant-manager.zip" : var.tenant_manager_lambda_zip
+}
+
 data "aws_iam_policy_document" "lambda_assume_role" {
   statement {
     effect = "Allow"
@@ -49,22 +53,40 @@ resource "aws_iam_role_policy" "tenant_manager_ec2" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeInstances",
-          "ec2:TerminateInstances"
-        ]
+        Effect   = "Allow"
+        Action   = "ec2:DescribeInstances"
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "ec2:TerminateInstances"
         Resource = "*"
         Condition = {
           StringEquals = {
             "aws:ResourceTag/ghr:environment" = var.prefix
           }
         }
-      },
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "tenant_manager_ssm" {
+  name = "ssm"
+  role = aws_iam_role.tenant_manager.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
       {
-        Effect   = "Allow"
-        Action   = "ec2:DescribeInstances"
-        Resource = "*"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = [
+          "arn:${var.aws_partition}:ssm:${var.aws_region}:*:parameter${local.ssm_root_path}/*"
+        ]
       }
     ]
   })
@@ -77,7 +99,8 @@ resource "aws_iam_role_policy_attachment" "tenant_manager_logs" {
 
 resource "aws_cloudwatch_log_group" "tenant_manager" {
   name              = "/aws/lambda/${aws_lambda_function.tenant_manager.function_name}"
-  retention_in_days = 14
+  retention_in_days = var.logging_retention_in_days
+  kms_key_id        = var.logging_kms_key_id
   tags              = local.tags
 }
 
@@ -85,20 +108,21 @@ resource "aws_lambda_function" "tenant_manager" {
   function_name = "${var.prefix}-tenant-manager"
   role          = aws_iam_role.tenant_manager.arn
   handler       = "index.lambdaHandler"
-  runtime       = "nodejs20.x"
+  runtime       = "nodejs24.x"
   timeout       = var.lambda_timeout
   memory_size   = 256
   architectures = ["arm64"]
 
-  filename         = var.tenant_manager_lambda_zip
-  source_code_hash = filebase64sha256(var.tenant_manager_lambda_zip)
+  filename         = local.tenant_manager_lambda_zip
+  source_code_hash = filebase64sha256(local.tenant_manager_lambda_zip)
 
   environment {
     variables = {
-      TENANT_TABLE_NAME       = aws_dynamodb_table.tenants.name
-      LOG_LEVEL               = var.log_level
-      AWS_REGION              = var.aws_region
-      POWERTOOLS_SERVICE_NAME = "tenant-manager"
+      TENANT_TABLE_NAME           = aws_dynamodb_table.tenants.name
+      LOG_LEVEL                   = var.log_level
+      AWS_REGION                  = var.aws_region
+      POWERTOOLS_SERVICE_NAME     = "tenant-manager"
+      POWERTOOLS_LOGGER_LOG_EVENT = var.log_level == "debug" ? "true" : "false"
     }
   }
 
@@ -109,7 +133,7 @@ resource "aws_lambda_function" "tenant_manager" {
 resource "aws_cloudwatch_event_rule" "installation" {
   name           = "${var.prefix}-installation"
   description    = "GitHub App installation events"
-  event_bus_name = module.webhook.eventbridge.event_bus_name
+  event_bus_name = module.webhook.eventbridge.event_bus.name
 
   event_pattern = jsonencode({
     "detail-type" = ["installation"]
@@ -120,7 +144,7 @@ resource "aws_cloudwatch_event_rule" "installation" {
 
 resource "aws_cloudwatch_event_target" "tenant_manager" {
   rule           = aws_cloudwatch_event_rule.installation.name
-  event_bus_name = module.webhook.eventbridge.event_bus_name
+  event_bus_name = module.webhook.eventbridge.event_bus.name
   target_id      = "tenant-manager"
   arn            = aws_lambda_function.tenant_manager.arn
 }

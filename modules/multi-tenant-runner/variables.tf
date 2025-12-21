@@ -70,6 +70,18 @@ variable "runner_tiers" {
       labels              = ["self-hosted", "linux", "x64", "large"]
     }
   }
+  validation {
+    condition     = alltrue([for tier in values(var.runner_tiers) : length(tier.labels) > 0])
+    error_message = "Each runner tier must have at least one label."
+  }
+  validation {
+    condition     = alltrue([for tier in values(var.runner_tiers) : tier.max_runners > 0])
+    error_message = "Each runner tier must have max_runners > 0."
+  }
+  validation {
+    condition     = alltrue([for tier in values(var.runner_tiers) : length(tier.instance_types) > 0])
+    error_message = "Each runner tier must have at least one instance type."
+  }
 }
 
 variable "ssm_paths" {
@@ -92,6 +104,10 @@ variable "eventbridge" {
     enable        = true
     accept_events = ["workflow_job", "installation"]
   }
+  validation {
+    condition     = var.eventbridge.enable == true
+    error_message = "EventBridge must be enabled for the multi-tenant runner module. The tenant-manager relies on EventBridge for installation event routing."
+  }
 }
 
 variable "lambda_timeout" {
@@ -104,6 +120,21 @@ variable "log_level" {
   description = "Lambda log level"
   type        = string
   default     = "info"
+  validation {
+    condition = anytrue([
+      var.log_level == "debug",
+      var.log_level == "info",
+      var.log_level == "warn",
+      var.log_level == "error",
+    ])
+    error_message = "`log_level` value not valid. Valid values are 'debug', 'info', 'warn', 'error'."
+  }
+}
+
+variable "kms_key_arn" {
+  description = "KMS key ARN for encrypting SSM parameters. If null, AWS managed key is used."
+  type        = string
+  default     = null
 }
 
 variable "tenant_manager_lambda_zip" {
@@ -114,6 +145,18 @@ variable "tenant_manager_lambda_zip" {
 
 variable "webhook_lambda_zip" {
   description = "Path to webhook Lambda zip file"
+  type        = string
+  default     = null
+}
+
+variable "logging_retention_in_days" {
+  description = "Specifies the number of days you want to retain log events for the Lambda log group."
+  type        = number
+  default     = 180
+}
+
+variable "logging_kms_key_id" {
+  description = "Specifies the KMS key ID to encrypt the logs with."
   type        = string
   default     = null
 }

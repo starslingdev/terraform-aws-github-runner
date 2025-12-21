@@ -19,21 +19,24 @@ resource "aws_lambda_function" "webhook" {
   architectures     = [var.config.lambda_architecture]
 
   environment {
-    variables = {
-      for k, v in {
-        LOG_LEVEL                                = var.config.log_level
-        POWERTOOLS_LOGGER_LOG_EVENT              = var.config.log_level == "debug" ? "true" : "false"
-        POWERTOOLS_SERVICE_NAME                  = "webhook"
-        POWERTOOLS_TRACE_ENABLED                 = var.config.tracing_config.mode != null ? true : false
-        POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.config.tracing_config.capture_http_requests
-        POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
-        # Parameters required for lambda configuration
-        ACCEPT_EVENTS                        = jsonencode(var.config.accept_events)
-        EVENT_BUS_NAME                       = aws_cloudwatch_event_bus.main.name
-        PARAMETER_GITHUB_APP_WEBHOOK_SECRET  = var.config.github_app_parameters.webhook_secret.name
-        PARAMETER_RUNNER_MATCHER_CONFIG_PATH = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
-      } : k => v if v != null
-    }
+    variables = merge(
+      {
+        for k, v in {
+          LOG_LEVEL                                = var.config.log_level
+          POWERTOOLS_LOGGER_LOG_EVENT              = var.config.log_level == "debug" ? "true" : "false"
+          POWERTOOLS_SERVICE_NAME                  = "webhook"
+          POWERTOOLS_TRACE_ENABLED                 = var.config.tracing_config.mode != null ? true : false
+          POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.config.tracing_config.capture_http_requests
+          POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
+          # Parameters required for lambda configuration
+          ACCEPT_EVENTS                        = jsonencode(var.config.accept_events)
+          EVENT_BUS_NAME                       = aws_cloudwatch_event_bus.main.name
+          PARAMETER_GITHUB_APP_WEBHOOK_SECRET  = var.config.github_app_parameters.webhook_secret.name
+          PARAMETER_RUNNER_MATCHER_CONFIG_PATH = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
+        } : k => v if v != null
+      },
+      var.config.lambda_environment_variables
+    )
   }
 
   dynamic "vpc_config" {

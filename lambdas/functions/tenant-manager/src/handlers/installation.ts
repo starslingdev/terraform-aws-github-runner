@@ -1,5 +1,5 @@
 import { createChildLogger } from '@aws-github-runner/aws-powertools-util';
-import { createTenant, updateTenant, invalidateTenantCache } from '@aws-github-runner/tenant-registry';
+import { createTenant, updateTenant, invalidateTenantCache, TenantConfig } from '@aws-github-runner/tenant-registry';
 import { EC2Client, DescribeInstancesCommand, TerminateInstancesCommand } from '@aws-sdk/client-ec2';
 import { getTracedAWSV3Client } from '@aws-github-runner/aws-powertools-util';
 import { InstallationEventDetail } from '../lambda';

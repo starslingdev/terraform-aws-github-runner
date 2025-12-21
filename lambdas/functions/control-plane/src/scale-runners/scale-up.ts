@@ -447,7 +447,7 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
             available: tenantAvailableSlots,
           });
           const excessCount = newRunners - tenantAvailableSlots;
-          invalidMessages.push(...messages.slice(0, excessCount).map(({ messageId }) => messageId));
+          invalidMessages.push(...messages.splice(0, excessCount).map(({ messageId }) => messageId));
           newRunners = tenantAvailableSlots;
         }
       }

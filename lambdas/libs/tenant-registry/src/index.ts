@@ -153,16 +153,16 @@ export async function updateTenant(installationId: number, updates: UpdateTenant
   if (updates.tier !== undefined) {
     updateExpressions.push('tier = :tier');
     expressionAttributeValues[':tier'] = updates.tier;
-    // Also update max_runners based on tier unless explicitly set
-    if (updates.max_runners === undefined) {
-      updateExpressions.push('max_runners = :max_runners');
-      expressionAttributeValues[':max_runners'] = TIER_LIMITS[updates.tier];
-    }
   }
 
+  // Handle max_runners: use explicit value if provided, otherwise derive from tier
   if (updates.max_runners !== undefined) {
     updateExpressions.push('max_runners = :max_runners');
     expressionAttributeValues[':max_runners'] = updates.max_runners;
+  } else if (updates.tier !== undefined) {
+    // Auto-update max_runners based on tier when not explicitly set
+    updateExpressions.push('max_runners = :max_runners');
+    expressionAttributeValues[':max_runners'] = TIER_LIMITS[updates.tier];
   }
 
   try {
@@ -173,6 +173,7 @@ export async function updateTenant(installationId: number, updates: UpdateTenant
         UpdateExpression: `SET ${updateExpressions.join(', ')}`,
         ExpressionAttributeValues: expressionAttributeValues,
         ExpressionAttributeNames: updates.status !== undefined ? { '#status': 'status' } : undefined,
+        ConditionExpression: 'attribute_exists(installation_id)',
         ReturnValues: 'ALL_NEW',
       }),
     );
@@ -180,6 +181,10 @@ export async function updateTenant(installationId: number, updates: UpdateTenant
     logger.info('Tenant updated', { installationId, updates });
     return result.Attributes as TenantConfig;
   } catch (error) {
+    if ((error as Error).name === 'ConditionalCheckFailedException') {
+      logger.warn('Tenant not found for update', { installationId });
+      return null;
+    }
     logger.error('Failed to update tenant', { error, installationId, updates });
     throw error;
   }
@@ -190,17 +195,26 @@ export async function listTenantsByStatus(status: TenantStatus): Promise<TenantC
   const tableName = getTableName();
 
   try {
-    const result = await client.send(
-      new QueryCommand({
-        TableName: tableName,
-        IndexName: 'status-index',
-        KeyConditionExpression: '#status = :status',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':status': status },
-      }),
-    );
+    const allItems: TenantConfig[] = [];
+    let lastEvaluatedKey: Record<string, unknown> | undefined;
 
-    return (result.Items || []) as TenantConfig[];
+    do {
+      const result = await client.send(
+        new QueryCommand({
+          TableName: tableName,
+          IndexName: 'status-index',
+          KeyConditionExpression: '#status = :status',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: { ':status': status },
+          ExclusiveStartKey: lastEvaluatedKey,
+        }),
+      );
+
+      allItems.push(...((result.Items || []) as TenantConfig[]));
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastEvaluatedKey);
+
+    return allItems;
   } catch (error) {
     logger.error('Failed to list tenants by status', { error, status });
     throw error;
@@ -235,6 +249,7 @@ export async function getTenantByOrgName(orgName: string): Promise<TenantConfig 
 // Cache for tenant lookups (in-memory, per Lambda instance)
 const tenantCache = new Map<number, { tenant: TenantConfig; expiry: number }>();
 const CACHE_TTL_MS = 60000; // 1 minute
+const MAX_CACHE_SIZE = 1000; // Prevent unbounded cache growth
 
 export async function getTenantCached(installationId: number): Promise<TenantConfig | null> {
   const cached = tenantCache.get(installationId);
@@ -244,6 +259,12 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
 
   const tenant = await getTenant(installationId);
   if (tenant) {
+    // Evict oldest entries if cache is full
+    if (tenantCache.size >= MAX_CACHE_SIZE) {
+      const oldestKey = tenantCache.keys().next().value;
+      if (oldestKey !== undefined) tenantCache.delete(oldestKey);
+    }
+
     tenantCache.set(installationId, {
       tenant,
       expiry: Date.now() + CACHE_TTL_MS,

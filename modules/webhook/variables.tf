@@ -214,3 +214,9 @@ EOF
     accept_events = optional(list(string), null)
   })
 }
+
+variable "lambda_environment_variables" {
+  description = "Additional environment variables for the Lambda function."
+  type        = map(string)
+  default     = {}
+}

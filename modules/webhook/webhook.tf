@@ -85,6 +85,7 @@ module "direct" {
         version = p.version
       }
     ]
+    lambda_environment_variables = var.lambda_environment_variables
   }
 }
 
@@ -126,7 +127,8 @@ module "eventbridge" {
         version = p.version
       }
     ]
-    accept_events = var.eventbridge.accept_events
+    accept_events                = var.eventbridge.accept_events
+    lambda_environment_variables = var.lambda_environment_variables
   }
 
 }

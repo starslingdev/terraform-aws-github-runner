@@ -34,10 +34,8 @@ resource "random_string" "random" {
 module "ssm" {
   source = "../ssm"
 
-  prefix        = var.prefix
-  github_app    = var.github_app
-  kms_key_arn   = null
-  aws_partition = var.aws_partition
-  tags          = local.tags
-  path_prefix   = "${local.ssm_root_path}/app"
+  github_app  = var.github_app
+  kms_key_arn = var.kms_key_arn
+  tags        = local.tags
+  path_prefix = "${local.ssm_root_path}/app"
 }

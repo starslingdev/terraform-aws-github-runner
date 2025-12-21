@@ -16,6 +16,11 @@ export interface TenantConfig {
   max_runners: number;
   created_at: string;
   updated_at: string;
+  metadata?: {
+    github_account_id?: number;
+    sender_login?: string;
+    sender_id?: number;
+  };
 }
 
 let docClient: DynamoDBDocumentClient | null = null;
@@ -35,6 +40,7 @@ function getDocClient(): DynamoDBDocumentClient {
 // Cache for tenant lookups (in-memory, per Lambda instance)
 const tenantCache = new Map<number, { tenant: TenantConfig; expiry: number }>();
 const CACHE_TTL_MS = 60000; // 1 minute
+const MAX_CACHE_SIZE = 1000; // Prevent unbounded cache growth
 
 export async function getTenantCached(installationId: number): Promise<TenantConfig | null> {
   const cached = tenantCache.get(installationId);
@@ -60,10 +66,18 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
 
     if (!result.Item) {
       logger.debug('Tenant not found', { installationId });
+      tenantCache.delete(installationId);
       return null;
     }
 
     const tenant = result.Item as TenantConfig;
+
+    // Evict oldest entries if cache is full
+    if (tenantCache.size >= MAX_CACHE_SIZE) {
+      const oldestKey = tenantCache.keys().next().value;
+      if (oldestKey !== undefined) tenantCache.delete(oldestKey);
+    }
+
     tenantCache.set(installationId, {
       tenant,
       expiry: Date.now() + CACHE_TTL_MS,
@@ -72,7 +86,9 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
     return tenant;
   } catch (error) {
     logger.error('Failed to get tenant', { error, installationId });
-    throw error;
+    // Return null instead of throwing - allows graceful degradation
+    // This prevents DynamoDB connectivity issues from crashing webhook processing
+    return null;
   }
 }
 

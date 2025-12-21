@@ -8,7 +8,13 @@ output "tenant_table" {
 
 output "webhook" {
   description = "Webhook endpoint configuration"
-  value       = module.webhook.webhook
+  value = {
+    gateway          = module.webhook.gateway
+    endpoint         = "${module.webhook.gateway.api_endpoint}/${module.webhook.endpoint_relative_path}"
+    lambda           = module.webhook.lambda
+    lambda_log_group = module.webhook.lambda_log_group
+    eventbridge      = module.webhook.eventbridge
+  }
 }
 
 output "runner_tiers" {

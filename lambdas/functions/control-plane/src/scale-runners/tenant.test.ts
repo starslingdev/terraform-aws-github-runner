@@ -119,4 +119,41 @@ describe('getTenantConfig', () => {
 
     expect(result).toBeNull();
   });
+
+  it('should refetch from DynamoDB after cache TTL expires', async () => {
+    vi.useFakeTimers();
+    process.env.TENANT_TABLE_NAME = 'test-tenants';
+    mockDocClient.on(GetCommand).resolves({ Item: sampleTenant });
+
+    await getTenantConfig('12345');
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1);
+
+    vi.advanceTimersByTime(60001);
+
+    await getTenantConfig('12345');
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(2);
+
+    vi.useRealTimers();
+  });
+
+  it('should evict oldest entry when cache exceeds MAX_CACHE_SIZE', async () => {
+    process.env.TENANT_TABLE_NAME = 'test-tenants';
+    mockDocClient.on(GetCommand).callsFake((input) => ({
+      Item: { ...sampleTenant, installation_id: input.Key.installation_id },
+    }));
+
+    for (let i = 1; i <= 1000; i++) {
+      await getTenantConfig(String(i));
+    }
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1000);
+
+    await getTenantConfig('1001');
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1001);
+
+    await getTenantConfig('2'); // still cached
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1001);
+
+    await getTenantConfig('1'); // evicted, refetch
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1002);
+  });
 });

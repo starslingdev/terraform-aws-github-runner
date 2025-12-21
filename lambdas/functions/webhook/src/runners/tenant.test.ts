@@ -82,10 +82,56 @@ describe('getTenantCached', () => {
     expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1);
   });
 
-  it('should throw error on DynamoDB failure', async () => {
+  it('should return null on DynamoDB failure for graceful degradation', async () => {
     process.env.TENANT_TABLE_NAME = 'test-tenants';
     mockDocClient.on(GetCommand).rejects(new Error('DynamoDB error'));
 
-    await expect(getTenantCached(12345)).rejects.toThrow('DynamoDB error');
+    const result = await getTenantCached(12345);
+
+    expect(result).toBeNull();
+  });
+
+  it('should refetch from DynamoDB after cache TTL expires', async () => {
+    vi.useFakeTimers();
+    process.env.TENANT_TABLE_NAME = 'test-tenants';
+    mockDocClient.on(GetCommand).resolves({ Item: sampleTenant });
+
+    // First call - populates cache
+    await getTenantCached(12345);
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1);
+
+    // Advance time past TTL (60001ms > 60000ms)
+    vi.advanceTimersByTime(60001);
+
+    // Second call - cache expired, should hit DynamoDB again
+    await getTenantCached(12345);
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(2);
+
+    vi.useRealTimers();
+  });
+
+  it('should evict oldest entry when cache exceeds MAX_CACHE_SIZE', async () => {
+    process.env.TENANT_TABLE_NAME = 'test-tenants';
+    mockDocClient.on(GetCommand).callsFake((input) => ({
+      Item: { ...sampleTenant, installation_id: input.Key.installation_id },
+    }));
+
+    // Populate cache with 1000 entries (MAX_CACHE_SIZE)
+    for (let i = 1; i <= 1000; i++) {
+      await getTenantCached(i);
+    }
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1000);
+
+    // Add 1001st - should evict entry #1
+    await getTenantCached(1001);
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1001);
+
+    // Entry #2 should still be cached
+    await getTenantCached(2);
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1001);
+
+    // Entry #1 was evicted - should refetch
+    await getTenantCached(1);
+    expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1002);
   });
 });

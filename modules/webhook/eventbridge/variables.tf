@@ -46,6 +46,7 @@ variable "config" {
       arn     = string
       version = string
     }))
-    accept_events = optional(list(string), null)
+    accept_events                = optional(list(string), null)
+    lambda_environment_variables = optional(map(string), {})
   })
 }

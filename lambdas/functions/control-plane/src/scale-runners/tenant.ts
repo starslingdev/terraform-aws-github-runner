@@ -16,6 +16,11 @@ export interface TenantConfig {
   max_runners: number;
   created_at: string;
   updated_at: string;
+  metadata?: {
+    github_account_id?: number;
+    sender_login?: string;
+    sender_id?: number;
+  };
 }
 
 let docClient: DynamoDBDocumentClient | null = null;
@@ -35,6 +40,7 @@ function getDocClient(): DynamoDBDocumentClient {
 // Cache for tenant lookups (in-memory, per Lambda instance)
 const tenantCache = new Map<string, { tenant: TenantConfig; expiry: number }>();
 const CACHE_TTL_MS = 60000; // 1 minute
+const MAX_CACHE_SIZE = 1000; // Prevent unbounded cache growth
 
 export async function getTenantConfig(tenantId: string): Promise<TenantConfig | null> {
   // Skip tenant lookup if not in multi-tenant mode
@@ -51,20 +57,34 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig | 
   }
 
   try {
+    const installationId = parseInt(tenantId, 10);
+    if (isNaN(installationId)) {
+      logger.warn('Invalid tenant ID format', { tenantId });
+      return null;
+    }
+
     const client = getDocClient();
     const result = await client.send(
       new GetCommand({
         TableName: tableName,
-        Key: { installation_id: parseInt(tenantId, 10) },
+        Key: { installation_id: installationId },
       }),
     );
 
     if (!result.Item) {
       logger.debug('Tenant not found', { tenantId });
+      tenantCache.delete(tenantId);
       return null;
     }
 
     const tenant = result.Item as TenantConfig;
+
+    // Evict oldest entries if cache is full
+    if (tenantCache.size >= MAX_CACHE_SIZE) {
+      const oldestKey = tenantCache.keys().next().value;
+      if (oldestKey) tenantCache.delete(oldestKey);
+    }
+
     tenantCache.set(tenantId, {
       tenant,
       expiry: Date.now() + CACHE_TTL_MS,
