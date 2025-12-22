@@ -31,7 +31,7 @@ resource "aws_sqs_queue" "tier_builds" {
   for_each = var.runner_tiers
 
   name                       = "${var.prefix}-${each.key}-builds"
-  delay_seconds              = 30
+  delay_seconds              = var.delay_webhook_event
   visibility_timeout_seconds = var.lambda_timeout + 10
   message_retention_seconds  = 86400 # 1 day
   sqs_managed_sse_enabled    = true

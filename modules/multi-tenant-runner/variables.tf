@@ -227,3 +227,49 @@ variable "default_tenant_tier" {
     error_message = "Valid values are 'small', 'medium', or 'large'."
   }
 }
+
+variable "delay_webhook_event" {
+  description = <<-EOT
+    Delay in seconds before SQS message becomes visible to the scale-up Lambda.
+    For ephemeral runners (default), set to 0 for fastest startup.
+    For non-ephemeral runners, a delay allows existing idle runners to pick up jobs first.
+  EOT
+  type        = number
+  default     = 0
+  validation {
+    condition     = var.delay_webhook_event >= 0 && var.delay_webhook_event <= 900
+    error_message = "delay_webhook_event must be between 0 and 900 seconds."
+  }
+}
+
+variable "ami" {
+  description = <<-EOT
+    AMI configuration for the runner instances. When using pre-baked AMIs (recommended for faster boot times):
+    - Set filter and owners to match your pre-baked AMI
+    - Set enable_userdata = false to skip user-data package installations
+
+    Example for pre-baked AMI:
+    ami = {
+      filter = { name = ["github-runner-al2023-x86_64-*"], state = ["available"] }
+      owners = ["self"]  # Or your AWS account ID
+    }
+  EOT
+  type = object({
+    filter                = optional(map(list(string)))
+    owners                = optional(list(string))
+    id_ssm_parameter_name = optional(string)
+    id_ssm_parameter_arn  = optional(string)
+    kms_key_arn           = optional(string)
+  })
+  default = null
+}
+
+variable "enable_userdata" {
+  description = <<-EOT
+    Whether to run the user-data script on runner instances.
+    Set to false when using a pre-baked AMI that already has all packages installed.
+    This significantly reduces boot time (saves ~60-90 seconds).
+  EOT
+  type        = bool
+  default     = true
+}

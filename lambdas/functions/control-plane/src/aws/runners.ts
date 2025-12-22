@@ -29,12 +29,17 @@ interface Ec2Filter {
 export async function listEC2Runners(
   filters: Runners.ListRunnerFilters | undefined = undefined,
 ): Promise<Runners.RunnerList[]> {
-  const ec2Filters = constructFilters(filters);
-  const runners: Runners.RunnerList[] = [];
-  for (const filter of ec2Filters) {
-    runners.push(...(await getRunners(filter)));
+  const subsegment = tracer.getSegment()?.addNewSubsegment('ec2_list_runners');
+  try {
+    const ec2Filters = constructFilters(filters);
+    const runners: Runners.RunnerList[] = [];
+    for (const filter of ec2Filters) {
+      runners.push(...(await getRunners(filter)));
+    }
+    return runners;
+  } finally {
+    subsegment?.close();
   }
-  return runners;
 }
 
 export async function countRunnersByTenant(filters: Runners.ListRunnersByTenantFilters): Promise<number> {
@@ -266,69 +271,75 @@ async function createInstances(
   amiIdOverride: string | undefined,
   ec2Client: EC2Client,
 ) {
-  const tags = [
-    { Key: 'ghr:Application', Value: 'github-action-runner' },
-    { Key: 'ghr:created_by', Value: runnerParameters.numberOfRunners === 1 ? 'scale-up-lambda' : 'pool-lambda' },
-    { Key: 'ghr:Type', Value: runnerParameters.runnerType },
-    { Key: 'ghr:Owner', Value: runnerParameters.runnerOwner },
-  ];
-
-  // Add tenant tags if present (multi-tenant mode)
-  if (runnerParameters.tenantId) {
-    tags.push({ Key: 'ghr:tenant_id', Value: runnerParameters.tenantId });
-  }
-  if (runnerParameters.tenantTier) {
-    tags.push({ Key: 'ghr:tenant_tier', Value: runnerParameters.tenantTier });
-  }
-
-  if (runnerParameters.tracingEnabled) {
-    const traceId = tracer.getRootXrayTraceId();
-    tags.push({ Key: 'ghr:trace_id', Value: traceId! });
-  }
-
-  let fleet: CreateFleetResult;
+  const subsegment = tracer.getSegment()?.addNewSubsegment('ec2_create_fleet');
   try {
-    // see for spec https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateFleet.html
-    const createFleetCommand = new CreateFleetCommand({
-      LaunchTemplateConfigs: [
-        {
-          LaunchTemplateSpecification: {
-            LaunchTemplateName: runnerParameters.launchTemplateName,
-            Version: '$Default',
+    const tags = [
+      { Key: 'ghr:Application', Value: 'github-action-runner' },
+      { Key: 'ghr:created_by', Value: runnerParameters.numberOfRunners === 1 ? 'scale-up-lambda' : 'pool-lambda' },
+      { Key: 'ghr:Type', Value: runnerParameters.runnerType },
+      { Key: 'ghr:Owner', Value: runnerParameters.runnerOwner },
+    ];
+
+    // Add tenant tags if present (multi-tenant mode)
+    if (runnerParameters.tenantId) {
+      tags.push({ Key: 'ghr:tenant_id', Value: runnerParameters.tenantId });
+    }
+    if (runnerParameters.tenantTier) {
+      tags.push({ Key: 'ghr:tenant_tier', Value: runnerParameters.tenantTier });
+    }
+
+    if (runnerParameters.tracingEnabled) {
+      const traceId = tracer.getRootXrayTraceId();
+      tags.push({ Key: 'ghr:trace_id', Value: traceId! });
+    }
+
+    let fleet: CreateFleetResult;
+    try {
+      // see for spec https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateFleet.html
+      const createFleetCommand = new CreateFleetCommand({
+        LaunchTemplateConfigs: [
+          {
+            LaunchTemplateSpecification: {
+              LaunchTemplateName: runnerParameters.launchTemplateName,
+              Version: '$Default',
+            },
+            Overrides: generateFleetOverrides(
+              runnerParameters.subnets,
+              runnerParameters.ec2instanceCriteria.instanceTypes,
+              amiIdOverride,
+            ),
           },
-          Overrides: generateFleetOverrides(
-            runnerParameters.subnets,
-            runnerParameters.ec2instanceCriteria.instanceTypes,
-            amiIdOverride,
-          ),
+        ],
+        SpotOptions: {
+          MaxTotalPrice: runnerParameters.ec2instanceCriteria.maxSpotPrice,
+          AllocationStrategy: runnerParameters.ec2instanceCriteria.instanceAllocationStrategy,
         },
-      ],
-      SpotOptions: {
-        MaxTotalPrice: runnerParameters.ec2instanceCriteria.maxSpotPrice,
-        AllocationStrategy: runnerParameters.ec2instanceCriteria.instanceAllocationStrategy,
-      },
-      TargetCapacitySpecification: {
-        TotalTargetCapacity: runnerParameters.numberOfRunners,
-        DefaultTargetCapacityType: runnerParameters.ec2instanceCriteria.targetCapacityType,
-      },
-      TagSpecifications: [
-        {
-          ResourceType: 'instance',
-          Tags: tags,
+        TargetCapacitySpecification: {
+          TotalTargetCapacity: runnerParameters.numberOfRunners,
+          DefaultTargetCapacityType: runnerParameters.ec2instanceCriteria.targetCapacityType,
         },
-        {
-          ResourceType: 'volume',
-          Tags: tags,
-        },
-      ],
-      Type: 'instant',
-    });
-    fleet = await ec2Client.send(createFleetCommand);
-  } catch (e) {
-    logger.warn('Create fleet request failed.', { error: e as Error });
-    throw e;
+        TagSpecifications: [
+          {
+            ResourceType: 'instance',
+            Tags: tags,
+          },
+          {
+            ResourceType: 'volume',
+            Tags: tags,
+          },
+        ],
+        Type: 'instant',
+      });
+      fleet = await ec2Client.send(createFleetCommand);
+    } catch (e) {
+      logger.warn('Create fleet request failed.', { error: e as Error });
+      subsegment?.addError(e as Error);
+      throw e;
+    }
+    return fleet;
+  } finally {
+    subsegment?.close();
   }
-  return fleet;
 }
 
 // If launchTime is undefined, this will return false

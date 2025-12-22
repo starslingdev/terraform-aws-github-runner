@@ -19,7 +19,7 @@ type StrategyOptions = {
 import { request } from '@octokit/request';
 import { Octokit } from '@octokit/rest';
 import { throttling } from '@octokit/plugin-throttling';
-import { createChildLogger } from '@aws-github-runner/aws-powertools-util';
+import { createChildLogger, tracer } from '@aws-github-runner/aws-powertools-util';
 import { getParameter } from '@aws-github-runner/aws-ssm-util';
 import { EndpointDefaults } from '@octokit/types';
 
@@ -55,41 +55,56 @@ export async function createGithubAppAuth(
   installationId: number | undefined,
   ghesApiUrl = '',
 ): Promise<AppAuthentication> {
-  const auth = await createAuth(installationId, ghesApiUrl);
-  const appAuthOptions: AppAuthOptions = { type: 'app' };
-  return auth(appAuthOptions);
+  const subsegment = tracer.getSegment()?.addNewSubsegment('github_app_auth');
+  try {
+    const auth = await createAuth(installationId, ghesApiUrl);
+    const appAuthOptions: AppAuthOptions = { type: 'app' };
+    return await auth(appAuthOptions);
+  } finally {
+    subsegment?.close();
+  }
 }
 
 export async function createGithubInstallationAuth(
   installationId: number | undefined,
   ghesApiUrl = '',
 ): Promise<InstallationAccessTokenAuthentication> {
-  const auth = await createAuth(installationId, ghesApiUrl);
-  const installationAuthOptions: InstallationAuthOptions = { type: 'installation', installationId };
-  return auth(installationAuthOptions);
+  const subsegment = tracer.getSegment()?.addNewSubsegment('github_installation_auth');
+  try {
+    const auth = await createAuth(installationId, ghesApiUrl);
+    const installationAuthOptions: InstallationAuthOptions = { type: 'installation', installationId };
+    return await auth(installationAuthOptions);
+  } finally {
+    subsegment?.close();
+  }
 }
 
 async function createAuth(installationId: number | undefined, ghesApiUrl: string): Promise<AuthInterface> {
-  const appId = parseInt(await getParameter(process.env.PARAMETER_GITHUB_APP_ID_NAME));
-  let authOptions: StrategyOptions = {
-    appId,
-    privateKey: Buffer.from(
-      await getParameter(process.env.PARAMETER_GITHUB_APP_KEY_BASE64_NAME),
-      'base64',
-      // replace literal \n characters with new lines to allow the key to be stored as a
-      // single line variable. This logic should match how the GitHub Terraform provider
-      // processes private keys to retain compatibility between the projects
-    )
-      .toString()
-      .replace('/[\\n]/g', String.fromCharCode(10)),
-  };
-  if (installationId) authOptions = { ...authOptions, installationId };
+  const subsegment = tracer.getSegment()?.addNewSubsegment('ssm_fetch_github_credentials');
+  try {
+    const appId = parseInt(await getParameter(process.env.PARAMETER_GITHUB_APP_ID_NAME));
+    let authOptions: StrategyOptions = {
+      appId,
+      privateKey: Buffer.from(
+        await getParameter(process.env.PARAMETER_GITHUB_APP_KEY_BASE64_NAME),
+        'base64',
+        // replace literal \n characters with new lines to allow the key to be stored as a
+        // single line variable. This logic should match how the GitHub Terraform provider
+        // processes private keys to retain compatibility between the projects
+      )
+        .toString()
+        .replace('/[\\n]/g', String.fromCharCode(10)),
+    };
+    if (installationId) authOptions = { ...authOptions, installationId };
 
-  logger.debug(`GHES API URL: ${ghesApiUrl}`);
-  if (ghesApiUrl) {
-    authOptions.request = request.defaults({
-      baseUrl: ghesApiUrl,
-    });
+    logger.debug(`GHES API URL: ${ghesApiUrl}`);
+    if (ghesApiUrl) {
+      authOptions.request = request.defaults({
+        baseUrl: ghesApiUrl,
+      });
+    }
+    return createAppAuth(authOptions);
+  } finally {
+    subsegment?.close();
   }
-  return createAppAuth(authOptions);
 }

@@ -126,6 +126,10 @@ module "runners" {
 
   # Pass tenant table name to scale-up Lambda for multi-tenant limit enforcement
   tenant_table_name = aws_dynamodb_table.tenants.name
+
+  # AMI configuration (optional, for pre-baked AMIs)
+  ami             = var.ami
+  enable_userdata = var.enable_userdata
 }
 
 # IAM policy for scale-up Lambda to read tenant configuration from DynamoDB

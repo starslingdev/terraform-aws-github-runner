@@ -46,7 +46,7 @@ variable "config" {
       arn     = string
       version = string
     }))
-    accept_events     = optional(list(string), null)
+    accept_events       = optional(list(string), null)
     tenant_table_name   = optional(string)
     tenant_table_arn    = optional(string)
     enable_tenant_table = optional(bool, false)

@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import { addPersistentContextToChildLogger, createChildLogger } from '@aws-github-runner/aws-powertools-util';
+import { addPersistentContextToChildLogger, createChildLogger, tracer } from '@aws-github-runner/aws-powertools-util';
 import { getParameter, putParameter } from '@aws-github-runner/aws-ssm-util';
 import yn from 'yn';
 
@@ -95,17 +95,22 @@ function generateRunnerServiceConfig(githubRunnerConfig: CreateGitHubRunnerConfi
 }
 
 async function getGithubRunnerRegistrationToken(githubRunnerConfig: CreateGitHubRunnerConfig, ghClient: Octokit) {
-  const registrationToken =
-    githubRunnerConfig.runnerType === 'Org'
-      ? await ghClient.actions.createRegistrationTokenForOrg({ org: githubRunnerConfig.runnerOwner })
-      : await ghClient.actions.createRegistrationTokenForRepo({
-          owner: githubRunnerConfig.runnerOwner.split('/')[0],
-          repo: githubRunnerConfig.runnerOwner.split('/')[1],
-        });
+  const subsegment = tracer.getSegment()?.addNewSubsegment('github_registration_token');
+  try {
+    const registrationToken =
+      githubRunnerConfig.runnerType === 'Org'
+        ? await ghClient.actions.createRegistrationTokenForOrg({ org: githubRunnerConfig.runnerOwner })
+        : await ghClient.actions.createRegistrationTokenForRepo({
+            owner: githubRunnerConfig.runnerOwner.split('/')[0],
+            repo: githubRunnerConfig.runnerOwner.split('/')[1],
+          });
 
-  const appId = parseInt(await getParameter(process.env.PARAMETER_GITHUB_APP_ID_NAME));
-  logger.info('App id from SSM', { appId: appId });
-  return registrationToken.data.token;
+    const appId = parseInt(await getParameter(process.env.PARAMETER_GITHUB_APP_ID_NAME));
+    logger.info('App id from SSM', { appId: appId });
+    return registrationToken.data.token;
+  } finally {
+    subsegment?.close();
+  }
 }
 
 function removeTokenFromLogging(config: string[]): string[] {
@@ -144,20 +149,25 @@ export async function getInstallationId(
 }
 
 export async function isJobQueued(githubInstallationClient: Octokit, payload: ActionRequestMessage): Promise<boolean> {
-  let isQueued = false;
-  if (payload.eventType === 'workflow_job') {
-    const jobForWorkflowRun = await githubInstallationClient.actions.getJobForWorkflowRun({
-      job_id: payload.id,
-      owner: payload.repositoryOwner,
-      repo: payload.repositoryName,
-    });
-    metricGitHubAppRateLimit(jobForWorkflowRun.headers);
-    isQueued = jobForWorkflowRun.data.status === 'queued';
-    logger.debug(`The job ${payload.id} is${isQueued ? ' ' : 'not'} queued`);
-  } else {
-    throw Error(`Event ${payload.eventType} is not supported`);
+  const subsegment = tracer.getSegment()?.addNewSubsegment('github_job_queued_check');
+  try {
+    let isQueued = false;
+    if (payload.eventType === 'workflow_job') {
+      const jobForWorkflowRun = await githubInstallationClient.actions.getJobForWorkflowRun({
+        job_id: payload.id,
+        owner: payload.repositoryOwner,
+        repo: payload.repositoryName,
+      });
+      metricGitHubAppRateLimit(jobForWorkflowRun.headers);
+      isQueued = jobForWorkflowRun.data.status === 'queued';
+      logger.debug(`The job ${payload.id} is${isQueued ? ' ' : 'not'} queued`);
+    } else {
+      throw Error(`Event ${payload.eventType} is not supported`);
+    }
+    return isQueued;
+  } finally {
+    subsegment?.close();
   }
-  return isQueued;
 }
 
 async function getRunnerGroupId(githubRunnerConfig: CreateGitHubRunnerConfig, ghClient: Octokit): Promise<number> {
