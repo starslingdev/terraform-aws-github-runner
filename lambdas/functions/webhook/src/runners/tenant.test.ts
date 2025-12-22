@@ -29,16 +29,16 @@ const sampleTenant: TenantConfig = {
 };
 
 describe('getTenantCached', () => {
-  it('should return null when TENANT_TABLE_NAME is not set', async () => {
+  it('should return disabled outcome when TENANT_TABLE_NAME is not set', async () => {
     delete process.env.TENANT_TABLE_NAME;
 
     const result = await getTenantCached(12345);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ outcome: 'disabled' });
     expect(mockDocClient).not.toHaveReceivedCommand(GetCommand);
   });
 
-  it('should return tenant config when found', async () => {
+  it('should return found outcome with tenant config when found', async () => {
     process.env.TENANT_TABLE_NAME = 'test-tenants';
     mockDocClient.on(GetCommand).resolves({
       Item: sampleTenant,
@@ -46,14 +46,14 @@ describe('getTenantCached', () => {
 
     const result = await getTenantCached(12345);
 
-    expect(result).toEqual(sampleTenant);
+    expect(result).toEqual({ outcome: 'found', tenant: sampleTenant });
     expect(mockDocClient).toHaveReceivedCommandWith(GetCommand, {
       TableName: 'test-tenants',
       Key: { installation_id: 12345 },
     });
   });
 
-  it('should return null when tenant not found', async () => {
+  it('should return not_found outcome when tenant not found', async () => {
     process.env.TENANT_TABLE_NAME = 'test-tenants';
     mockDocClient.on(GetCommand).resolves({
       Item: undefined,
@@ -61,7 +61,7 @@ describe('getTenantCached', () => {
 
     const result = await getTenantCached(99999);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ outcome: 'not_found' });
   });
 
   it('should cache tenant lookups', async () => {
@@ -72,23 +72,27 @@ describe('getTenantCached', () => {
 
     // First call - should hit DynamoDB
     const result1 = await getTenantCached(12345);
-    expect(result1).toEqual(sampleTenant);
+    expect(result1).toEqual({ outcome: 'found', tenant: sampleTenant });
 
     // Second call - should use cache
     const result2 = await getTenantCached(12345);
-    expect(result2).toEqual(sampleTenant);
+    expect(result2).toEqual({ outcome: 'found', tenant: sampleTenant });
 
     // Should only have called DynamoDB once
     expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1);
   });
 
-  it('should return null on DynamoDB failure for graceful degradation', async () => {
+  it('should return lookup_error outcome on DynamoDB failure for graceful degradation', async () => {
     process.env.TENANT_TABLE_NAME = 'test-tenants';
-    mockDocClient.on(GetCommand).rejects(new Error('DynamoDB error'));
+    const dynamoError = new Error('DynamoDB error');
+    mockDocClient.on(GetCommand).rejects(dynamoError);
 
     const result = await getTenantCached(12345);
 
-    expect(result).toBeNull();
+    expect(result.outcome).toBe('lookup_error');
+    if (result.outcome === 'lookup_error') {
+      expect(result.error).toBe(dynamoError);
+    }
   });
 
   it('should refetch from DynamoDB after cache TTL expires', async () => {

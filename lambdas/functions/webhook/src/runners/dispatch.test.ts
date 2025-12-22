@@ -11,9 +11,18 @@ import { canRunJob, dispatch } from './dispatch';
 import { ConfigDispatcher } from '../ConfigLoader';
 import { logger } from '@aws-github-runner/aws-powertools-util';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as tenantModule from './tenant';
 
 vi.mock('../sqs');
 vi.mock('@aws-github-runner/aws-ssm-util');
+vi.mock('./tenant', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tenant')>();
+  return {
+    ...actual,
+    getTenantCached: vi.fn(),
+    clearTenantCache: vi.fn(),
+  };
+});
 
 const GITHUB_APP_WEBHOOK_SECRET = 'TEST_SECRET';
 
@@ -22,6 +31,7 @@ const cleanEnv = process.env;
 describe('Dispatcher', () => {
   let originalError: Console['error'];
   let config: ConfigDispatcher;
+  const mockGetTenantCached = vi.mocked(tenantModule.getTenantCached);
 
   beforeEach(async () => {
     logger.setLogLevel('DEBUG');
@@ -32,6 +42,9 @@ describe('Dispatcher', () => {
     console.error = vi.fn();
     vi.clearAllMocks();
     vi.resetAllMocks();
+
+    // Default to non-multi-tenant mode (disabled)
+    mockGetTenantCached.mockResolvedValue({ outcome: 'disabled' });
 
     mockSSMResponse();
     config = await createConfig(undefined, runnerConfig);
@@ -248,3 +261,138 @@ async function createConfig(repositoryAllowList?: string[], runnerConfig?: Runne
   mockSSMResponse(runnerConfig);
   return await ConfigDispatcher.load();
 }
+
+describe('Multi-tenant validation', () => {
+  let config: ConfigDispatcher;
+  const mockGetTenantCached = vi.mocked(tenantModule.getTenantCached);
+
+  const sampleTenant: tenantModule.TenantConfig = {
+    installation_id: 12345,
+    org_name: 'test-org',
+    org_type: 'Organization',
+    status: 'active',
+    tier: 'small',
+    max_runners: 2,
+    created_at: '2024-01-01T00:00:00.000Z',
+    updated_at: '2024-01-01T00:00:00.000Z',
+  };
+
+  beforeEach(async () => {
+    logger.setLogLevel('DEBUG');
+    process.env = { ...cleanEnv };
+    process.env.TENANT_TABLE_NAME = 'test-tenants';
+    nock.disableNetConnect();
+    vi.clearAllMocks();
+
+    mockSSMResponse();
+    config = await createConfig(undefined, runnerConfig);
+  });
+
+  it('should process job normally when tenant is found and active', async () => {
+    mockGetTenantCached.mockResolvedValue({ outcome: 'found', tenant: sampleTenant });
+
+    const event = {
+      ...workFlowJobEvent,
+      installation: { id: 12345 },
+    } as unknown as WorkflowJobEvent;
+
+    const resp = await dispatch(event, 'workflow_job', config);
+
+    expect(resp.statusCode).toBe(201);
+    expect(sendActionRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: '12345',
+        tenantTier: 'small',
+      }),
+    );
+  });
+
+  it('should reject job with 403 when tenant is not found', async () => {
+    mockGetTenantCached.mockResolvedValue({ outcome: 'not_found' });
+
+    const event = {
+      ...workFlowJobEvent,
+      installation: { id: 99999 },
+    } as unknown as WorkflowJobEvent;
+
+    await expect(dispatch(event, 'workflow_job', config)).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('Unknown tenant'),
+    });
+    expect(sendActionRequest).not.toHaveBeenCalled();
+  });
+
+  it('should reject job with 403 when tenant is not active', async () => {
+    mockGetTenantCached.mockResolvedValue({
+      outcome: 'found',
+      tenant: { ...sampleTenant, status: 'suspended' },
+    });
+
+    const event = {
+      ...workFlowJobEvent,
+      installation: { id: 12345 },
+    } as unknown as WorkflowJobEvent;
+
+    await expect(dispatch(event, 'workflow_job', config)).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining('suspended'),
+    });
+    expect(sendActionRequest).not.toHaveBeenCalled();
+  });
+
+  it('should gracefully degrade and queue job without tenant when DynamoDB lookup fails', async () => {
+    mockGetTenantCached.mockResolvedValue({
+      outcome: 'lookup_error',
+      error: new Error('DynamoDB error'),
+    });
+
+    const event = {
+      ...workFlowJobEvent,
+      installation: { id: 12345 },
+    } as unknown as WorkflowJobEvent;
+
+    const resp = await dispatch(event, 'workflow_job', config);
+
+    expect(resp.statusCode).toBe(201);
+    // Job should be queued without tenant info (graceful degradation)
+    expect(sendActionRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: undefined,
+        tenantTier: undefined,
+      }),
+    );
+  });
+
+  it('should skip tenant validation when multi-tenant mode is disabled', async () => {
+    delete process.env.TENANT_TABLE_NAME;
+    mockGetTenantCached.mockResolvedValue({ outcome: 'disabled' });
+
+    const event = {
+      ...workFlowJobEvent,
+      installation: { id: 12345 },
+    } as unknown as WorkflowJobEvent;
+
+    const resp = await dispatch(event, 'workflow_job', config);
+
+    expect(resp.statusCode).toBe(201);
+    expect(sendActionRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: undefined,
+        tenantTier: undefined,
+      }),
+    );
+  });
+
+  it('should reject job with 400 when installation_id is missing in multi-tenant mode', async () => {
+    const event = {
+      ...workFlowJobEvent,
+      installation: undefined,
+    } as unknown as WorkflowJobEvent;
+
+    await expect(dispatch(event, 'workflow_job', config)).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('Missing installation_id'),
+    });
+    expect(sendActionRequest).not.toHaveBeenCalled();
+  });
+});

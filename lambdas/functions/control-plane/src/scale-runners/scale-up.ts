@@ -7,7 +7,7 @@ import { createGithubAppAuth, createGithubInstallationAuth, createOctokitClient 
 import { createRunner, listEC2Runners, countRunnersByTenant, tag } from './../aws/runners';
 import { RunnerInputParameters } from './../aws/runners.d';
 import { metricGitHubAppRateLimit } from '../github/rate-limit';
-import { getTenantConfig, TenantLookupError } from './tenant';
+import { getTenantConfig, getTenantConfigByInstallationId, TenantLookupError, isMultiTenantMode } from './tenant';
 
 const logger = createChildLogger('scale-up');
 
@@ -376,8 +376,9 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
 
     // Get tenant info from first message BEFORE any array mutations
     // All messages in a group have the same tenant (enforced by grouping key including tenantId)
+    // Note: tenantId may be undefined if webhook gracefully degraded during DynamoDB outage
     const tenantId = messages[0]?.tenantId;
-    const tenantTier = messages[0]?.tenantTier;
+    let tenantTier = messages[0]?.tenantTier;
 
     // Extract actual owner from messages - the grouping key may contain tenant suffix
     // Use this for GitHub API calls and EC2 tagging, not the grouping key
@@ -426,16 +427,45 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
     });
 
     // Check tenant limits if in multi-tenant mode
-    if (tenantId) {
+    // This handles two cases:
+    // 1. tenantId present: Normal path, use tenantId to look up tenant
+    // 2. tenantId missing but multi-tenant enabled: Webhook gracefully degraded,
+    //    look up tenant from installationId (fail-closed enforcement)
+    const installationId = messages[0]?.installationId;
+    let effectiveTenantId: string | undefined = tenantId;
+
+    if (tenantId || isMultiTenantMode()) {
       try {
-        const tenant = await getTenantConfig(tenantId);
+        let tenant;
+        if (tenantId) {
+          // Normal path: tenantId provided by webhook
+          tenant = await getTenantConfig(tenantId);
+          // effectiveTenantId is already set to tenantId
+        } else {
+          // Graceful degradation path: webhook couldn't look up tenant,
+          // scale-up must do fail-closed validation using installationId
+          logger.info('No tenantId in message, looking up tenant by installationId (fail-closed)', {
+            installationId,
+          });
+          tenant = await getTenantConfigByInstallationId(installationId);
+          // Set effectiveTenantId and tenantTier for runner tagging and quota tracking
+          if (tenant) {
+            effectiveTenantId = String(tenant.installation_id);
+            tenantTier = tenant.tier;
+          }
+        }
 
         // tenant is null only when NOT in multi-tenant mode (TENANT_TABLE_NAME not set)
         if (tenant) {
+          // At this point effectiveTenantId is guaranteed to be set:
+          // - If tenantId was provided, effectiveTenantId = tenantId (string)
+          // - If we looked up by installationId and found tenant, effectiveTenantId = String(tenant.installation_id)
+          const validatedTenantId = effectiveTenantId as string;
+
           // Validate tenant status - reject if not active
           if (tenant.status !== 'active') {
             logger.warn('Tenant not active, rejecting messages', {
-              tenantId,
+              tenantId: validatedTenantId,
               orgName: tenant.org_name,
               status: tenant.status,
             });
@@ -443,13 +473,13 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
             continue;
           }
 
-          const currentTenantRunners = await countRunnersByTenant({ tenantId, environment });
+          const currentTenantRunners = await countRunnersByTenant({ tenantId: validatedTenantId, environment });
           const tenantMaxRunners = tenant.max_runners;
           const tenantAvailableSlots = Math.max(0, tenantMaxRunners - currentTenantRunners);
 
           if (tenantAvailableSlots === 0) {
             logger.warn('Tenant at runner limit', {
-              tenantId,
+              tenantId: validatedTenantId,
               orgName: tenant.org_name,
               currentRunners: currentTenantRunners,
               maxRunners: tenantMaxRunners,
@@ -461,7 +491,7 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
           // Further limit newRunners by tenant quota
           if (newRunners > tenantAvailableSlots) {
             logger.warn('Limiting runners to tenant quota', {
-              tenantId,
+              tenantId: validatedTenantId,
               orgName: tenant.org_name,
               requested: newRunners,
               available: tenantAvailableSlots,
@@ -470,12 +500,15 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
             invalidMessages.push(...messages.splice(0, excessCount).map(({ messageId }) => messageId));
             newRunners = tenantAvailableSlots;
           }
+
+          // Update effectiveTenantId for runner creation (used outside this block)
+          effectiveTenantId = validatedTenantId;
         }
       } catch (error) {
         // Fail-closed: reject messages when tenant lookup fails in multi-tenant mode
         if (error instanceof TenantLookupError) {
           logger.error('Tenant lookup failed, rejecting messages (fail-closed)', {
-            tenantId,
+            tenantId: effectiveTenantId || String(installationId),
             error: error.message,
           });
           invalidMessages.push(...messages.map(({ messageId }) => messageId));
@@ -513,7 +546,7 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
         amiIdSsmParameterName,
         tracingEnabled,
         onDemandFailoverOnError,
-        tenantId,
+        tenantId: effectiveTenantId,
         tenantTier,
       },
       newRunners,

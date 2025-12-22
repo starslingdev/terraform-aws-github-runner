@@ -6,6 +6,20 @@ import { TenantConfig, TenantStatus, TenantTier } from '@aws-github-runner/tenan
 // Re-export types for use by dispatch.ts and other modules
 export { TenantConfig, TenantStatus, TenantTier };
 
+/**
+ * Discriminated union type for tenant lookup results.
+ * This allows callers to distinguish between:
+ * - 'found': Tenant exists and was successfully retrieved
+ * - 'not_found': Tenant does not exist in DynamoDB (legitimate 403)
+ * - 'lookup_error': DynamoDB error occurred (should gracefully degrade)
+ * - 'disabled': Multi-tenant mode is not enabled
+ */
+export type TenantLookupResult =
+  | { outcome: 'found'; tenant: TenantConfig }
+  | { outcome: 'not_found' }
+  | { outcome: 'lookup_error'; error?: Error }
+  | { outcome: 'disabled' };
+
 const logger = createChildLogger('tenant');
 
 let docClient: DynamoDBDocumentClient | null = null;
@@ -30,22 +44,28 @@ const MAX_CACHE_SIZE = 1000; // Prevent unbounded cache growth
 /**
  * Get tenant configuration with caching.
  *
- * This function uses graceful degradation (fail-open) - it returns null on errors
- * rather than throwing. This is intentional for the webhook Lambda since:
- * 1. Webhook is the first line of defense and should remain available during DynamoDB outages
- * 2. Scale-up Lambda provides fail-closed enforcement as the final guard
+ * This function returns a discriminated union to distinguish between:
+ * - 'found': Tenant exists and was successfully retrieved
+ * - 'not_found': Tenant does not exist in DynamoDB (legitimate unknown tenant)
+ * - 'lookup_error': DynamoDB error occurred (infrastructure failure)
+ * - 'disabled': Multi-tenant mode is not enabled (TENANT_TABLE_NAME not set)
+ *
+ * This distinction allows the webhook to:
+ * 1. Reject unknown tenants with 403 (not_found)
+ * 2. Gracefully degrade during DynamoDB outages (lookup_error)
+ * 3. Scale-up Lambda provides fail-closed enforcement as the final guard
  */
-export async function getTenantCached(installationId: number): Promise<TenantConfig | null> {
+export async function getTenantCached(installationId: number): Promise<TenantLookupResult> {
   const cached = tenantCache.get(installationId);
   if (cached && cached.expiry > Date.now()) {
     logger.debug('Tenant cache hit', { installationId });
-    return cached.tenant;
+    return { outcome: 'found', tenant: cached.tenant };
   }
 
   const tableName = process.env.TENANT_TABLE_NAME;
   if (!tableName) {
     logger.debug('TENANT_TABLE_NAME not set, skipping tenant lookup');
-    return null;
+    return { outcome: 'disabled' };
   }
 
   try {
@@ -60,7 +80,7 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
     if (!result.Item) {
       logger.debug('Tenant not found', { installationId });
       tenantCache.delete(installationId);
-      return null;
+      return { outcome: 'not_found' };
     }
 
     const tenant = result.Item as TenantConfig;
@@ -76,13 +96,13 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
       expiry: Date.now() + CACHE_TTL_MS,
     });
 
-    return tenant;
+    return { outcome: 'found', tenant };
   } catch (error) {
     logger.error('Failed to get tenant', { error, installationId });
-    // Return null instead of throwing - allows graceful degradation
+    // Return lookup_error instead of throwing - allows graceful degradation
     // This prevents DynamoDB connectivity issues from crashing webhook processing
     // Scale-up Lambda provides fail-closed enforcement as the final guard
-    return null;
+    return { outcome: 'lookup_error', error: error as Error };
   }
 }
 

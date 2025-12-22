@@ -23,35 +23,56 @@ export async function dispatch(
 }
 
 async function validateTenant(event: WorkflowJobEvent): Promise<TenantConfig | null> {
-  // Skip tenant validation if not in multi-tenant mode
-  if (!process.env.TENANT_TABLE_NAME) {
+  const installationId = event.installation?.id;
+
+  // In multi-tenant mode, installation_id is required. We check this before calling
+  // getTenantCached because we need the installationId for the lookup.
+  // Note: getTenantCached will return 'disabled' if TENANT_TABLE_NAME is not set.
+  if (!installationId) {
+    // Only error if multi-tenant mode is enabled
+    if (process.env.TENANT_TABLE_NAME) {
+      logger.warn('Missing installation_id in webhook payload');
+      throw new ValidationError(400, 'Missing installation_id in webhook payload');
+    }
+    // Non-multi-tenant mode: proceed without tenant validation
     return null;
   }
 
-  const installationId = event.installation?.id;
-  if (!installationId) {
-    logger.warn('Missing installation_id in webhook payload');
-    throw new ValidationError(400, 'Missing installation_id in webhook payload');
+  const result = await getTenantCached(installationId);
+
+  switch (result.outcome) {
+    case 'disabled':
+      // Multi-tenant mode not enabled (TENANT_TABLE_NAME not set)
+      return null;
+
+    case 'found': {
+      const tenant = result.tenant;
+      if (tenant.status !== 'active') {
+        logger.warn('Tenant not active', { installationId, status: tenant.status });
+        throw new ValidationError(403, `Tenant ${tenant.org_name} is ${tenant.status}`);
+      }
+      logger.info('Tenant validated', {
+        installationId,
+        orgName: tenant.org_name,
+        tier: tenant.tier,
+      });
+      return tenant;
+    }
+
+    case 'not_found':
+      // Legitimate unknown tenant - reject with 403
+      logger.warn('Unknown tenant', { installationId });
+      throw new ValidationError(403, `Unknown tenant for installation ${installationId}`);
+
+    case 'lookup_error':
+      // GRACEFUL DEGRADATION: DynamoDB error, queue job anyway
+      // Scale-up Lambda will do fail-closed validation using installationId
+      logger.warn('Tenant lookup failed, gracefully degrading', {
+        installationId,
+        error: result.error?.message,
+      });
+      return null;
   }
-
-  const tenant = await getTenantCached(installationId);
-  if (!tenant) {
-    logger.warn('Unknown tenant', { installationId });
-    throw new ValidationError(403, `Unknown tenant for installation ${installationId}`);
-  }
-
-  if (tenant.status !== 'active') {
-    logger.warn('Tenant not active', { installationId, status: tenant.status });
-    throw new ValidationError(403, `Tenant ${tenant.org_name} is ${tenant.status}`);
-  }
-
-  logger.info('Tenant validated', {
-    installationId,
-    orgName: tenant.org_name,
-    tier: tenant.tier,
-  });
-
-  return tenant;
 }
 
 function validateRepoInAllowList(event: WorkflowJobEvent, config: ConfigDispatcher) {

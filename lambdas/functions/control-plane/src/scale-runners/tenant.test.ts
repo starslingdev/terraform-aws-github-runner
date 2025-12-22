@@ -5,6 +5,7 @@ import 'aws-sdk-client-mock-jest/vitest';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
   getTenantConfig,
+  getTenantConfigByInstallationId,
   isMultiTenantMode,
   clearTenantCache,
   resetLoggedNonMultiTenantMode,
@@ -203,6 +204,78 @@ describe('getTenantConfig', () => {
         expect((error as TenantLookupError).name).toBe('TenantLookupError');
         expect((error as TenantLookupError).tenantId).toBe('99999');
       }
+    });
+  });
+});
+
+describe('getTenantConfigByInstallationId', () => {
+  describe('non-multi-tenant mode (TENANT_TABLE_NAME not set)', () => {
+    it('should return null when TENANT_TABLE_NAME is not set', async () => {
+      delete process.env.TENANT_TABLE_NAME;
+
+      const result = await getTenantConfigByInstallationId(12345);
+
+      expect(result).toBeNull();
+      expect(mockDocClient).not.toHaveReceivedCommand(GetCommand);
+    });
+  });
+
+  describe('multi-tenant mode (TENANT_TABLE_NAME set)', () => {
+    beforeEach(() => {
+      process.env.TENANT_TABLE_NAME = 'test-tenants';
+    });
+
+    it('should throw TenantLookupError when installationId is 0', async () => {
+      await expect(getTenantConfigByInstallationId(0)).rejects.toThrow(TenantLookupError);
+      await expect(getTenantConfigByInstallationId(0)).rejects.toThrow('Missing installationId in multi-tenant mode');
+      expect(mockDocClient).not.toHaveReceivedCommand(GetCommand);
+    });
+
+    it('should return tenant config when found', async () => {
+      mockDocClient.on(GetCommand).resolves({
+        Item: sampleTenant,
+      });
+
+      const result = await getTenantConfigByInstallationId(12345);
+
+      expect(result).toEqual(sampleTenant);
+      expect(mockDocClient).toHaveReceivedCommandWith(GetCommand, {
+        TableName: 'test-tenants',
+        Key: { installation_id: 12345 },
+      });
+    });
+
+    it('should throw TenantLookupError when tenant not found (fail-closed)', async () => {
+      mockDocClient.on(GetCommand).resolves({
+        Item: undefined,
+      });
+
+      await expect(getTenantConfigByInstallationId(99999)).rejects.toThrow(TenantLookupError);
+      await expect(getTenantConfigByInstallationId(99999)).rejects.toThrow('Tenant not found: 99999');
+    });
+
+    it('should throw TenantLookupError on DynamoDB error (fail-closed)', async () => {
+      mockDocClient.on(GetCommand).rejects(new Error('DynamoDB error'));
+
+      await expect(getTenantConfigByInstallationId(12345)).rejects.toThrow(TenantLookupError);
+      await expect(getTenantConfigByInstallationId(12345)).rejects.toThrow('Failed to fetch tenant config: 12345');
+    });
+
+    it('should use cached tenant lookups', async () => {
+      mockDocClient.on(GetCommand).resolves({
+        Item: sampleTenant,
+      });
+
+      // First call - should hit DynamoDB
+      const result1 = await getTenantConfigByInstallationId(12345);
+      expect(result1).toEqual(sampleTenant);
+
+      // Second call - should use cache
+      const result2 = await getTenantConfigByInstallationId(12345);
+      expect(result2).toEqual(sampleTenant);
+
+      // Should only have called DynamoDB once
+      expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1);
     });
   });
 });

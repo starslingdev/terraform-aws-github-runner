@@ -10,7 +10,7 @@ import { createRunner, listEC2Runners, countRunnersByTenant } from './../aws/run
 import { RunnerInputParameters } from './../aws/runners.d';
 import * as scaleUpModule from './scale-up';
 import { getParameter } from '@aws-github-runner/aws-ssm-util';
-import { getTenantConfig, TenantLookupError } from './tenant';
+import { getTenantConfig, getTenantConfigByInstallationId, isMultiTenantMode, TenantLookupError } from './tenant';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Octokit } from '@octokit/rest';
 
@@ -34,6 +34,8 @@ const mockCreateRunner = vi.mocked(createRunner);
 const mockListRunners = vi.mocked(listEC2Runners);
 const mockCountRunnersByTenant = vi.mocked(countRunnersByTenant);
 const mockGetTenantConfig = vi.mocked(getTenantConfig);
+const mockGetTenantConfigByInstallationId = vi.mocked(getTenantConfigByInstallationId);
+const mockIsMultiTenantMode = vi.mocked(isMultiTenantMode);
 const mockSSMClient = mockClient(SSMClient);
 const mockSSMgetParameter = vi.mocked(getParameter);
 
@@ -55,6 +57,8 @@ vi.mock('./tenant', async (importOriginal) => {
   return {
     ...actual,
     getTenantConfig: vi.fn(),
+    getTenantConfigByInstallationId: vi.fn(),
+    isMultiTenantMode: vi.fn(),
     clearTenantCache: vi.fn(),
   };
 });
@@ -2032,6 +2036,150 @@ describe('Multi-tenant quota enforcement', () => {
 
     await expect(scaleUpModule.scaleUp(messages)).rejects.toThrow('Unexpected error');
     expect(createRunner).not.toHaveBeenCalled();
+  });
+
+  describe('graceful degradation (missing tenantId in multi-tenant mode)', () => {
+    const createMessagesWithoutTenant = (
+      count: number,
+      installationId: number,
+      overrides?: Partial<scaleUpModule.ActionRequestMessageSQS>,
+    ): scaleUpModule.ActionRequestMessageSQS[] => {
+      return Array.from({ length: count }, (_, i) => ({
+        id: 2000 + i,
+        eventType: 'workflow_job' as const,
+        repositoryName: 'test-repo',
+        repositoryOwner: 'test-owner',
+        installationId: installationId,
+        repoOwnerType: 'Organization',
+        messageId: `no-tenant-msg-${i}`,
+        // No tenantId or tenantTier - simulates graceful degradation from webhook
+        ...overrides,
+      }));
+    };
+
+    it('should look up tenant by installationId when tenantId is missing and multi-tenant mode enabled', async () => {
+      const installationId = 12345;
+      const messages = createMessagesWithoutTenant(2, installationId);
+
+      mockIsMultiTenantMode.mockReturnValue(true);
+      mockGetTenantConfigByInstallationId.mockResolvedValue({
+        installation_id: installationId,
+        org_name: 'test-org',
+        org_type: 'Organization',
+        status: 'active',
+        tier: 'medium',
+        max_runners: 5,
+        created_at: '2024-01-01T00:00:00.000Z',
+        updated_at: '2024-01-01T00:00:00.000Z',
+      });
+      mockCountRunnersByTenant.mockResolvedValue(0);
+
+      await scaleUpModule.scaleUp(messages);
+
+      // Should have looked up by installationId
+      expect(mockGetTenantConfigByInstallationId).toHaveBeenCalledWith(installationId);
+      expect(mockGetTenantConfig).not.toHaveBeenCalled();
+
+      // Should have created runners with the looked-up tenant info
+      expect(createRunner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: String(installationId),
+          tenantTier: 'medium',
+          numberOfRunners: 2,
+        }),
+      );
+    });
+
+    it('should reject messages when tenant lookup by installationId fails (fail-closed)', async () => {
+      const installationId = 99999;
+      const messages = createMessagesWithoutTenant(2, installationId);
+
+      mockIsMultiTenantMode.mockReturnValue(true);
+      mockGetTenantConfigByInstallationId.mockRejectedValue(
+        new TenantLookupError(`Tenant not found for installation: ${installationId}`, String(installationId)),
+      );
+
+      const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+      expect(createRunner).not.toHaveBeenCalled();
+      expect(invalidMessages).toHaveLength(2);
+    });
+
+    it('should reject messages when tenant from installationId lookup is not active', async () => {
+      const installationId = 12345;
+      const messages = createMessagesWithoutTenant(2, installationId);
+
+      mockIsMultiTenantMode.mockReturnValue(true);
+      mockGetTenantConfigByInstallationId.mockResolvedValue({
+        installation_id: installationId,
+        org_name: 'test-org',
+        org_type: 'Organization',
+        status: 'suspended',
+        tier: 'medium',
+        max_runners: 5,
+        created_at: '2024-01-01T00:00:00.000Z',
+        updated_at: '2024-01-01T00:00:00.000Z',
+      });
+
+      const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+      expect(createRunner).not.toHaveBeenCalled();
+      expect(invalidMessages).toHaveLength(2);
+    });
+
+    it('should skip tenant validation when tenantId is missing and multi-tenant mode disabled', async () => {
+      const installationId = 12345;
+      const messages = createMessagesWithoutTenant(2, installationId);
+
+      mockIsMultiTenantMode.mockReturnValue(false);
+
+      await scaleUpModule.scaleUp(messages);
+
+      // Should NOT have called any tenant lookup
+      expect(mockGetTenantConfig).not.toHaveBeenCalled();
+      expect(mockGetTenantConfigByInstallationId).not.toHaveBeenCalled();
+
+      // Should have created runners without tenant info
+      expect(createRunner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: undefined,
+          tenantTier: undefined,
+          numberOfRunners: 2,
+        }),
+      );
+    });
+
+    it('should enforce tenant quota when looked up by installationId', async () => {
+      const installationId = 12345;
+      const messages = createMessagesWithoutTenant(5, installationId);
+
+      mockIsMultiTenantMode.mockReturnValue(true);
+      mockGetTenantConfigByInstallationId.mockResolvedValue({
+        installation_id: installationId,
+        org_name: 'test-org',
+        org_type: 'Organization',
+        status: 'active',
+        tier: 'small',
+        max_runners: 2, // Only 2 runners allowed
+        created_at: '2024-01-01T00:00:00.000Z',
+        updated_at: '2024-01-01T00:00:00.000Z',
+      });
+      mockCountRunnersByTenant.mockResolvedValue(1); // 1 already running
+
+      const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+      // Should only create 1 runner (max_runners=2, current=1, available=1)
+      expect(createRunner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: String(installationId),
+          tenantTier: 'small',
+          numberOfRunners: 1,
+        }),
+      );
+
+      // 4 messages should be rejected (5 requested - 1 allowed)
+      expect(invalidMessages).toHaveLength(4);
+    });
   });
 });
 
