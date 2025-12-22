@@ -320,45 +320,46 @@ Note: This will terminate all running runners and delete the tenant registry.
 
 | Name | Version |
 |------|---------|
-| terraform | >= 1.3.0 |
-| aws | >= 5.0 |
-| random | >= 3.0 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3.0 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 6.21 |
+| <a name="requirement_random"></a> [random](#requirement\_random) | >= 3.0 |
 
 ## Providers
 
 | Name | Version |
 |------|---------|
-| random | >= 3.0 |
+| <a name="provider_random"></a> [random](#provider\_random) | >= 3.0 |
 
 ## Modules
 
 | Name | Source | Version |
 |------|--------|---------|
-| base | ../base | n/a |
-| runners | ../../modules/multi-tenant-runner | n/a |
+| <a name="module_base"></a> [base](#module\_base) | ../base | n/a |
+| <a name="module_runners"></a> [runners](#module\_runners) | ../../modules/multi-tenant-runner | n/a |
 
 ## Resources
 
 | Name | Type |
 |------|------|
-| random_id.random | resource |
+| [random_id.random](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| github_app | GitHub App configuration | `object({ id = string, key_base64 = string })` | n/a | yes |
-| environment | Environment name | `string` | `null` | no |
-| aws_region | AWS region | `string` | `"us-east-1"` | no |
+| <a name="input_aws_region"></a> [aws\_region](#input\_aws\_region) | AWS region | `string` | `"us-east-1"` | no |
+| <a name="input_environment"></a> [environment](#input\_environment) | Environment name | `string` | `null` | no |
+| <a name="input_github_app"></a> [github\_app](#input\_github\_app) | GitHub App configuration | <pre>object({<br/>    key_base64 = string<br/>    id         = string<br/>  })</pre> | n/a | yes |
 
 ## Outputs
 
 | Name | Description |
 |------|-------------|
-| webhook_endpoint | Webhook URL for GitHub App configuration |
-| tenant_table | DynamoDB table details for tenant registry |
-| runner_tiers | Configured runner tiers |
-| queues | SQS queues for each tier |
-| runners | Runner infrastructure for each tier |
-| runner_binaries | S3 buckets for runner binaries |
+| <a name="output_queues"></a> [queues](#output\_queues) | SQS queues for each tier |
+| <a name="output_runner_binaries"></a> [runner\_binaries](#output\_runner\_binaries) | S3 buckets for runner binaries |
+| <a name="output_runner_tiers"></a> [runner\_tiers](#output\_runner\_tiers) | Configured runner tiers |
+| <a name="output_runners"></a> [runners](#output\_runners) | Runner infrastructure for each tier |
+| <a name="output_tenant_table"></a> [tenant\_table](#output\_tenant\_table) | DynamoDB table details for tenant registry |
+| <a name="output_webhook_endpoint"></a> [webhook\_endpoint](#output\_webhook\_endpoint) | Webhook URL for GitHub App configuration |
+| <a name="output_webhook_secret"></a> [webhook\_secret](#output\_webhook\_secret) | Webhook secret for GitHub App configuration |
 <!-- END_TF_DOCS -->
