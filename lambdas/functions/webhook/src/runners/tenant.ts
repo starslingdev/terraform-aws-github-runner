@@ -1,27 +1,12 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { getTracedAWSV3Client, createChildLogger } from '@aws-github-runner/aws-powertools-util';
+import { TenantConfig, TenantStatus, TenantTier } from '@aws-github-runner/tenant-registry';
+
+// Re-export types for use by dispatch.ts and other modules
+export { TenantConfig, TenantStatus, TenantTier };
 
 const logger = createChildLogger('tenant');
-
-export type TenantStatus = 'active' | 'suspended' | 'deleted';
-export type TenantTier = 'small' | 'medium' | 'large';
-
-export interface TenantConfig {
-  installation_id: number;
-  org_name: string;
-  org_type: 'Organization' | 'User';
-  status: TenantStatus;
-  tier: TenantTier;
-  max_runners: number;
-  created_at: string;
-  updated_at: string;
-  metadata?: {
-    github_account_id?: number;
-    sender_login?: string;
-    sender_id?: number;
-  };
-}
 
 let docClient: DynamoDBDocumentClient | null = null;
 
@@ -42,6 +27,14 @@ const tenantCache = new Map<number, { tenant: TenantConfig; expiry: number }>();
 const CACHE_TTL_MS = 60000; // 1 minute
 const MAX_CACHE_SIZE = 1000; // Prevent unbounded cache growth
 
+/**
+ * Get tenant configuration with caching.
+ *
+ * This function uses graceful degradation (fail-open) - it returns null on errors
+ * rather than throwing. This is intentional for the webhook Lambda since:
+ * 1. Webhook is the first line of defense and should remain available during DynamoDB outages
+ * 2. Scale-up Lambda provides fail-closed enforcement as the final guard
+ */
 export async function getTenantCached(installationId: number): Promise<TenantConfig | null> {
   const cached = tenantCache.get(installationId);
   if (cached && cached.expiry > Date.now()) {
@@ -88,6 +81,7 @@ export async function getTenantCached(installationId: number): Promise<TenantCon
     logger.error('Failed to get tenant', { error, installationId });
     // Return null instead of throwing - allows graceful degradation
     // This prevents DynamoDB connectivity issues from crashing webhook processing
+    // Scale-up Lambda provides fail-closed enforcement as the final guard
     return null;
   }
 }

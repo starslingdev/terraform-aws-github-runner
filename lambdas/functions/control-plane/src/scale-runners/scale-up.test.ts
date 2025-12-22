@@ -10,7 +10,7 @@ import { createRunner, listEC2Runners, countRunnersByTenant } from './../aws/run
 import { RunnerInputParameters } from './../aws/runners.d';
 import * as scaleUpModule from './scale-up';
 import { getParameter } from '@aws-github-runner/aws-ssm-util';
-import { getTenantConfig, clearTenantCache } from './tenant';
+import { getTenantConfig, clearTenantCache, TenantLookupError } from './tenant';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Octokit } from '@octokit/rest';
 
@@ -50,10 +50,14 @@ vi.mock('./../aws/runners', async () => ({
   tag: vi.fn(),
 }));
 
-vi.mock('./tenant', async () => ({
-  getTenantConfig: vi.fn(),
-  clearTenantCache: vi.fn(),
-}));
+vi.mock('./tenant', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tenant')>();
+  return {
+    ...actual,
+    getTenantConfig: vi.fn(),
+    clearTenantCache: vi.fn(),
+  };
+});
 
 vi.mock('./../github/auth', async () => ({
   createGithubAppAuth: vi.fn(),
@@ -1943,6 +1947,91 @@ describe('Multi-tenant quota enforcement', () => {
 
     expect(tenantCall).toBeDefined();
     expect(nonTenantCall).toBeDefined();
+  });
+
+  // New tests for tenant status validation and fail-closed behavior
+
+  it('should reject all messages when tenant is suspended', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(3, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 12345,
+      org_name: 'TestOrg',
+      org_type: 'Organization',
+      status: 'suspended', // Suspended tenant
+      tier: 'small',
+      max_runners: 2,
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(0);
+
+    const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+    expect(createRunner).not.toHaveBeenCalled();
+    expect(invalidMessages).toHaveLength(3);
+  });
+
+  it('should reject all messages when tenant is deleted', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(3, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockResolvedValue({
+      installation_id: 12345,
+      org_name: 'TestOrg',
+      org_type: 'Organization',
+      status: 'deleted', // Deleted tenant
+      tier: 'small',
+      max_runners: 2,
+      created_at: '2024-01-01T00:00:00.000Z',
+      updated_at: '2024-01-01T00:00:00.000Z',
+    });
+    mockCountRunnersByTenant.mockResolvedValue(0);
+
+    const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+    expect(createRunner).not.toHaveBeenCalled();
+    expect(invalidMessages).toHaveLength(3);
+  });
+
+  it('should reject all messages when tenant lookup throws TenantLookupError (fail-closed)', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(3, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockRejectedValue(new TenantLookupError('Tenant not found: 12345', tenantId));
+
+    const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+    expect(createRunner).not.toHaveBeenCalled();
+    expect(invalidMessages).toHaveLength(3);
+  });
+
+  it('should reject all messages when DynamoDB error occurs (fail-closed)', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(3, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockRejectedValue(new TenantLookupError('Failed to fetch tenant config: 12345', tenantId));
+
+    const invalidMessages = await scaleUpModule.scaleUp(messages);
+
+    expect(createRunner).not.toHaveBeenCalled();
+    expect(invalidMessages).toHaveLength(3);
+  });
+
+  it('should re-throw non-TenantLookupError exceptions', async () => {
+    const tenantId = '12345';
+    const tenantTier = 'small';
+    const messages = createTenantMessages(3, tenantId, tenantTier);
+
+    mockGetTenantConfig.mockRejectedValue(new Error('Unexpected error'));
+
+    await expect(scaleUpModule.scaleUp(messages)).rejects.toThrow('Unexpected error');
+    expect(createRunner).not.toHaveBeenCalled();
   });
 });
 

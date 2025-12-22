@@ -7,7 +7,7 @@ import { createGithubAppAuth, createGithubInstallationAuth, createOctokitClient 
 import { createRunner, listEC2Runners, countRunnersByTenant, tag } from './../aws/runners';
 import { RunnerInputParameters } from './../aws/runners.d';
 import { metricGitHubAppRateLimit } from '../github/rate-limit';
-import { getTenantConfig } from './tenant';
+import { getTenantConfig, TenantLookupError } from './tenant';
 
 const logger = createChildLogger('scale-up');
 
@@ -427,35 +427,62 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
 
     // Check tenant limits if in multi-tenant mode
     if (tenantId) {
-      const tenant = await getTenantConfig(tenantId);
-      if (tenant) {
-        const currentTenantRunners = await countRunnersByTenant({ tenantId, environment });
-        const tenantMaxRunners = tenant.max_runners;
-        const tenantAvailableSlots = Math.max(0, tenantMaxRunners - currentTenantRunners);
+      try {
+        const tenant = await getTenantConfig(tenantId);
 
-        if (tenantAvailableSlots === 0) {
-          logger.warn('Tenant at runner limit', {
+        // tenant is null only when NOT in multi-tenant mode (TENANT_TABLE_NAME not set)
+        if (tenant) {
+          // Validate tenant status - reject if not active
+          if (tenant.status !== 'active') {
+            logger.warn('Tenant not active, rejecting messages', {
+              tenantId,
+              orgName: tenant.org_name,
+              status: tenant.status,
+            });
+            invalidMessages.push(...messages.map(({ messageId }) => messageId));
+            continue;
+          }
+
+          const currentTenantRunners = await countRunnersByTenant({ tenantId, environment });
+          const tenantMaxRunners = tenant.max_runners;
+          const tenantAvailableSlots = Math.max(0, tenantMaxRunners - currentTenantRunners);
+
+          if (tenantAvailableSlots === 0) {
+            logger.warn('Tenant at runner limit', {
+              tenantId,
+              orgName: tenant.org_name,
+              currentRunners: currentTenantRunners,
+              maxRunners: tenantMaxRunners,
+            });
+            invalidMessages.push(...messages.map(({ messageId }) => messageId));
+            continue;
+          }
+
+          // Further limit newRunners by tenant quota
+          if (newRunners > tenantAvailableSlots) {
+            logger.warn('Limiting runners to tenant quota', {
+              tenantId,
+              orgName: tenant.org_name,
+              requested: newRunners,
+              available: tenantAvailableSlots,
+            });
+            const excessCount = newRunners - tenantAvailableSlots;
+            invalidMessages.push(...messages.splice(0, excessCount).map(({ messageId }) => messageId));
+            newRunners = tenantAvailableSlots;
+          }
+        }
+      } catch (error) {
+        // Fail-closed: reject messages when tenant lookup fails in multi-tenant mode
+        if (error instanceof TenantLookupError) {
+          logger.error('Tenant lookup failed, rejecting messages (fail-closed)', {
             tenantId,
-            orgName: tenant.org_name,
-            currentRunners: currentTenantRunners,
-            maxRunners: tenantMaxRunners,
+            error: error.message,
           });
           invalidMessages.push(...messages.map(({ messageId }) => messageId));
           continue;
         }
-
-        // Further limit newRunners by tenant quota
-        if (newRunners > tenantAvailableSlots) {
-          logger.warn('Limiting runners to tenant quota', {
-            tenantId,
-            orgName: tenant.org_name,
-            requested: newRunners,
-            available: tenantAvailableSlots,
-          });
-          const excessCount = newRunners - tenantAvailableSlots;
-          invalidMessages.push(...messages.splice(0, excessCount).map(({ messageId }) => messageId));
-          newRunners = tenantAvailableSlots;
-        }
+        // Re-throw unexpected errors
+        throw error;
       }
     }
 

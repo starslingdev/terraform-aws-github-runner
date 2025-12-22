@@ -32,6 +32,7 @@
   "dependencies": {
     "@aws-github-runner/aws-powertools-util": "*",
     "@aws-github-runner/aws-ssm-util": "*",
+    "@aws-github-runner/tenant-registry": "*",
     "@aws-lambda-powertools/parameters": "^2.29.0",
     "@aws-sdk/client-dynamodb": "^3.948.0",
     "@aws-sdk/client-ec2": "^3.948.0",
