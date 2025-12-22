@@ -5,6 +5,7 @@ import { Response } from '../lambda';
 import { RunnerMatcherConfig, sendActionRequest } from '../sqs';
 import ValidationError from '../ValidationError';
 import { ConfigDispatcher, ConfigWebhook } from '../ConfigLoader';
+import { getTenantCached, TenantConfig } from './tenant';
 
 const logger = createChildLogger('handler');
 
@@ -13,9 +14,44 @@ export async function dispatch(
   eventType: string,
   config: ConfigDispatcher | ConfigWebhook,
 ): Promise<Response> {
+  // Validate tenant if multi-tenant mode is enabled
+  const tenant = await validateTenant(event);
+
   validateRepoInAllowList(event, config);
 
-  return await handleWorkflowJob(event, eventType, config.matcherConfig!);
+  return await handleWorkflowJob(event, eventType, config.matcherConfig!, tenant);
+}
+
+async function validateTenant(event: WorkflowJobEvent): Promise<TenantConfig | null> {
+  // Skip tenant validation if not in multi-tenant mode
+  if (!process.env.TENANT_TABLE_NAME) {
+    return null;
+  }
+
+  const installationId = event.installation?.id;
+  if (!installationId) {
+    logger.warn('Missing installation_id in webhook payload');
+    throw new ValidationError(400, 'Missing installation_id in webhook payload');
+  }
+
+  const tenant = await getTenantCached(installationId);
+  if (!tenant) {
+    logger.warn('Unknown tenant', { installationId });
+    throw new ValidationError(403, `Unknown tenant for installation ${installationId}`);
+  }
+
+  if (tenant.status !== 'active') {
+    logger.warn('Tenant not active', { installationId, status: tenant.status });
+    throw new ValidationError(403, `Tenant ${tenant.org_name} is ${tenant.status}`);
+  }
+
+  logger.info('Tenant validated', {
+    installationId,
+    orgName: tenant.org_name,
+    tier: tenant.tier,
+  });
+
+  return tenant;
 }
 
 function validateRepoInAllowList(event: WorkflowJobEvent, config: ConfigDispatcher) {
@@ -29,6 +65,7 @@ async function handleWorkflowJob(
   body: WorkflowJobEvent,
   githubEvent: string,
   matcherConfig: Array<RunnerMatcherConfig>,
+  tenant: TenantConfig | null,
 ): Promise<Response> {
   if (body.action !== 'queued') {
     return {
@@ -40,7 +77,8 @@ async function handleWorkflowJob(
   logger.debug(
     `Processing workflow job event - Repository: ${body.repository.full_name}, ` +
       `Job ID: ${body.workflow_job.id}, Job Name: ${body.workflow_job.name}, ` +
-      `Run ID: ${body.workflow_job.run_id}, Labels: ${JSON.stringify(body.workflow_job.labels)}`,
+      `Run ID: ${body.workflow_job.run_id}, Labels: ${JSON.stringify(body.workflow_job.labels)}` +
+      (tenant ? `, Tenant: ${tenant.org_name}` : ''),
   );
   // sort the queuesConfig by order of matcher config exact match, with all true matches lined up ahead.
   matcherConfig.sort((a, b) => {
@@ -56,10 +94,13 @@ async function handleWorkflowJob(
         installationId: body.installation?.id ?? 0,
         queueId: queue.id,
         repoOwnerType: body.repository.owner.type,
+        tenantId: tenant ? String(tenant.installation_id) : undefined,
+        tenantTier: tenant?.tier,
       });
       logger.info(
         `Successfully dispatched job for ${body.repository.full_name} to the queue ${queue.id} - ` +
-          `Job ID: ${body.workflow_job.id}, Job Name: ${body.workflow_job.name}, Run ID: ${body.workflow_job.run_id}`,
+          `Job ID: ${body.workflow_job.id}, Job Name: ${body.workflow_job.name}, Run ID: ${body.workflow_job.run_id}` +
+          (tenant ? `, Tenant: ${tenant.org_name}` : ''),
       );
       return {
         statusCode: 201,

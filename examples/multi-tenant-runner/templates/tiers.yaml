@@ -1,0 +1,57 @@
+# Runner Tier Definitions
+#
+# These are the fixed tiers available to all tenants.
+# Tenants select tiers by using the appropriate labels in their workflow files.
+#
+# Example workflow:
+#   jobs:
+#     build:
+#       runs-on: [self-hosted, linux, x64, medium]
+#       steps:
+#         - uses: actions/checkout@v4
+#         ...
+
+tiers:
+  small:
+    description: "Small tier for lightweight builds"
+    max_runners: 2
+    instance_types:
+      - t3.medium
+    labels:
+      - self-hosted
+      - linux
+      - x64
+      - small
+    specs:
+      vcpus: 2
+      memory_gb: 4
+
+  medium:
+    description: "Medium tier for standard builds"
+    max_runners: 5
+    instance_types:
+      - t3.large
+      - m5.large
+    labels:
+      - self-hosted
+      - linux
+      - x64
+      - medium
+    specs:
+      vcpus: 2
+      memory_gb: 8
+
+  large:
+    description: "Large tier for resource-intensive builds"
+    max_runners: 10
+    instance_types:
+      - t3.xlarge
+      - m5.xlarge
+    labels:
+      - self-hosted
+      - linux
+      - x64
+      - large
+    specs:
+      vcpus: 4
+      memory_gb: 16

@@ -44,4 +44,12 @@ export interface RunnerInputParameters {
   amiIdSsmParameterName?: string;
   tracingEnabled?: boolean;
   onDemandFailoverOnError?: string[];
+  tenantId?: string;
+  tenantTier?: string;
+}
+
+export interface ListRunnersByTenantFilters {
+  tenantId: string;
+  environment?: string;
+  statuses?: string[];
 }

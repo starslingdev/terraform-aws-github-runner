@@ -47,6 +47,8 @@ resource "aws_lambda_function" "dispatcher" {
         PARAMETER_RUNNER_MATCHER_CONFIG_PATH = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
         PARAMETER_RUNNER_MATCHER_VERSION     = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.version]) # enforce cold start after Changes in SSM parameter
         REPOSITORY_ALLOW_LIST                = jsonencode(var.config.repository_white_list)
+        # Multi-tenant configuration
+        TENANT_TABLE_NAME = var.config.tenant_table_name
       } : k => v if v != null
     }
   }
@@ -142,4 +144,27 @@ resource "aws_iam_role_policy" "dispatcher_xray" {
   name   = "xray-policy"
   policy = data.aws_iam_policy_document.lambda_xray[0].json
   role   = aws_iam_role.dispatcher_lambda.name
+}
+
+resource "aws_iam_role_policy" "dispatcher_dynamodb" {
+  count = var.config.tenant_table_name != null && var.config.tenant_table_arn != null ? 1 : 0
+  name  = "dynamodb-tenant-policy"
+  role  = aws_iam_role.dispatcher_lambda.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          var.config.tenant_table_arn,
+          "${var.config.tenant_table_arn}/index/*"
+        ]
+      }
+    ]
+  })
 }

@@ -12,6 +12,8 @@ export interface ActionRequestMessage {
   installationId: number;
   queueId: string;
   repoOwnerType: string;
+  tenantId?: string;
+  tenantTier?: string;
 }
 
 export interface MatcherConfig {

@@ -214,3 +214,15 @@ EOF
     accept_events = optional(list(string), null)
   })
 }
+
+variable "tenant_table_name" {
+  description = "DynamoDB table name for multi-tenant configuration. When set, enables tenant validation in the webhook."
+  type        = string
+  default     = null
+}
+
+variable "tenant_table_arn" {
+  description = "DynamoDB table ARN for multi-tenant configuration. Required for IAM policies when tenant_table_name is set."
+  type        = string
+  default     = null
+}

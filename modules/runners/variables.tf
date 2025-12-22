@@ -778,3 +778,9 @@ variable "lambda_event_source_mapping_maximum_batching_window_in_seconds" {
     error_message = "Maximum batching window must be between 0 and 300 seconds."
   }
 }
+
+variable "tenant_table_name" {
+  description = "DynamoDB table name for multi-tenant configuration. When set, enables per-tenant runner limits."
+  type        = string
+  default     = null
+}

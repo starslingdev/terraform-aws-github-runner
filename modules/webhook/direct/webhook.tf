@@ -18,17 +18,16 @@ resource "aws_lambda_function" "webhook" {
 
   environment {
     variables = {
-      for k, v in {
-        LOG_LEVEL                                = var.config.log_level
-        POWERTOOLS_LOGGER_LOG_EVENT              = var.config.log_level == "debug" ? "true" : "false"
-        POWERTOOLS_TRACE_ENABLED                 = var.config.tracing_config.mode != null ? true : false
-        POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.config.tracing_config.capture_http_requests
-        POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
-        PARAMETER_GITHUB_APP_WEBHOOK_SECRET      = var.config.github_app_parameters.webhook_secret.name
-        REPOSITORY_ALLOW_LIST                    = jsonencode(var.config.repository_white_list)
-        PARAMETER_RUNNER_MATCHER_CONFIG_PATH     = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
-        PARAMETER_RUNNER_MATCHER_VERSION         = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.version]) # enforce cold start after Changes in SSM parameter
-      } : k => v if v != null
+      LOG_LEVEL                                = var.config.log_level
+      POWERTOOLS_LOGGER_LOG_EVENT              = var.config.log_level == "debug" ? "true" : "false"
+      POWERTOOLS_TRACE_ENABLED                 = var.config.tracing_config.mode != null ? true : false
+      POWERTOOLS_TRACER_CAPTURE_HTTPS_REQUESTS = var.config.tracing_config.capture_http_requests
+      POWERTOOLS_TRACER_CAPTURE_ERROR          = var.config.tracing_config.capture_error
+      PARAMETER_GITHUB_APP_WEBHOOK_SECRET      = var.config.github_app_parameters.webhook_secret.name
+      REPOSITORY_ALLOW_LIST                    = jsonencode(var.config.repository_white_list)
+      PARAMETER_RUNNER_MATCHER_CONFIG_PATH     = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.name])
+      PARAMETER_RUNNER_MATCHER_VERSION         = join(":", [for p in var.config.ssm_parameter_runner_matcher_config : p.version]) # enforce cold start after Changes in SSM parameter
+      TENANT_TABLE_NAME                        = var.config.tenant_table_name
     }
   }
 
@@ -148,4 +147,27 @@ resource "aws_iam_role_policy" "xray" {
   name   = "xray-policy"
   policy = data.aws_iam_policy_document.lambda_xray[0].json
   role   = aws_iam_role.webhook_lambda.name
+}
+
+resource "aws_iam_role_policy" "webhook_dynamodb" {
+  count = var.config.tenant_table_name != null && var.config.tenant_table_arn != null ? 1 : 0
+  name  = "dynamodb-tenant-policy"
+  role  = aws_iam_role.webhook_lambda.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          var.config.tenant_table_arn,
+          "${var.config.tenant_table_arn}/index/*"
+        ]
+      }
+    ]
+  })
 }

@@ -4,9 +4,10 @@ import { getParameter, putParameter } from '@aws-github-runner/aws-ssm-util';
 import yn from 'yn';
 
 import { createGithubAppAuth, createGithubInstallationAuth, createOctokitClient } from '../github/auth';
-import { createRunner, listEC2Runners, tag } from './../aws/runners';
+import { createRunner, listEC2Runners, countRunnersByTenant, tag } from './../aws/runners';
 import { RunnerInputParameters } from './../aws/runners.d';
 import { metricGitHubAppRateLimit } from '../github/rate-limit';
+import { getTenantConfig, TenantLookupError } from './tenant';
 
 const logger = createChildLogger('scale-up');
 
@@ -29,6 +30,8 @@ export interface ActionRequestMessage {
   installationId: number;
   repoOwnerType: string;
   retryCounter?: number;
+  tenantId?: string;
+  tenantTier?: string;
 }
 
 export interface ActionRequestMessageSQS extends ActionRequestMessage {
@@ -62,6 +65,8 @@ interface CreateEC2RunnerConfig {
   amiIdSsmParameterName?: string;
   tracingEnabled?: boolean;
   onDemandFailoverOnError?: string[];
+  tenantId?: string;
+  tenantTier?: string;
 }
 
 function generateRunnerServiceConfig(githubRunnerConfig: CreateGitHubRunnerConfig, token: string) {
@@ -219,6 +224,8 @@ export async function createRunners(
     runnerOwner: githubRunnerConfig.runnerOwner,
     numberOfRunners,
     ...ec2RunnerConfig,
+    tenantId: ec2RunnerConfig.tenantId,
+    tenantTier: ec2RunnerConfig.tenantTier,
   });
   if (instances.length !== 0) {
     await createStartRunnerConfig(githubRunnerConfig, instances, ghClient);
@@ -300,7 +307,10 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       continue;
     }
 
-    const key = enableOrgLevel ? payload.repositoryOwner : `${payload.repositoryOwner}/${payload.repositoryName}`;
+    // Include tenantId in the grouping key to ensure different tenants are processed separately
+    // This prevents messages from different tenants being grouped together when using the same org/repo
+    const baseKey = enableOrgLevel ? payload.repositoryOwner : `${payload.repositoryOwner}/${payload.repositoryName}`;
+    const key = payload.tenantId ? `${baseKey}:tenant:${payload.tenantId}` : baseKey;
 
     let entry = validMessages.get(key);
 
@@ -364,9 +374,20 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       continue;
     }
 
+    // Get tenant info from first message BEFORE any array mutations
+    // All messages in a group have the same tenant (enforced by grouping key including tenantId)
+    const tenantId = messages[0]?.tenantId;
+    const tenantTier = messages[0]?.tenantTier;
+
+    // Extract actual owner from messages - the grouping key may contain tenant suffix
+    // Use this for GitHub API calls and EC2 tagging, not the grouping key
+    const actualOwner = enableOrgLevel
+      ? messages[0].repositoryOwner
+      : `${messages[0].repositoryOwner}/${messages[0].repositoryName}`;
+
     // Don't call the EC2 API if we can create an unlimited number of runners.
     const currentRunners =
-      maximumRunners === -1 ? 0 : (await listEC2Runners({ environment, runnerType, runnerOwner: group })).length;
+      maximumRunners === -1 ? 0 : (await listEC2Runners({ environment, runnerType, runnerOwner: actualOwner })).length;
 
     logger.info('Current runners', {
       currentRunners,
@@ -374,7 +395,7 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
     });
 
     // Calculate how many runners we want to create.
-    const newRunners =
+    let newRunners =
       maximumRunners === -1
         ? // If we don't have an upper limit, scale up by the number of new jobs.
           scaleUp
@@ -404,6 +425,67 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       newRunners,
     });
 
+    // Check tenant limits if in multi-tenant mode
+    if (tenantId) {
+      try {
+        const tenant = await getTenantConfig(tenantId);
+
+        // tenant is null only when NOT in multi-tenant mode (TENANT_TABLE_NAME not set)
+        if (tenant) {
+          // Validate tenant status - reject if not active
+          if (tenant.status !== 'active') {
+            logger.warn('Tenant not active, rejecting messages', {
+              tenantId,
+              orgName: tenant.org_name,
+              status: tenant.status,
+            });
+            invalidMessages.push(...messages.map(({ messageId }) => messageId));
+            continue;
+          }
+
+          const currentTenantRunners = await countRunnersByTenant({ tenantId, environment });
+          const tenantMaxRunners = tenant.max_runners;
+          const tenantAvailableSlots = Math.max(0, tenantMaxRunners - currentTenantRunners);
+
+          if (tenantAvailableSlots === 0) {
+            logger.warn('Tenant at runner limit', {
+              tenantId,
+              orgName: tenant.org_name,
+              currentRunners: currentTenantRunners,
+              maxRunners: tenantMaxRunners,
+            });
+            invalidMessages.push(...messages.map(({ messageId }) => messageId));
+            continue;
+          }
+
+          // Further limit newRunners by tenant quota
+          if (newRunners > tenantAvailableSlots) {
+            logger.warn('Limiting runners to tenant quota', {
+              tenantId,
+              orgName: tenant.org_name,
+              requested: newRunners,
+              available: tenantAvailableSlots,
+            });
+            const excessCount = newRunners - tenantAvailableSlots;
+            invalidMessages.push(...messages.splice(0, excessCount).map(({ messageId }) => messageId));
+            newRunners = tenantAvailableSlots;
+          }
+        }
+      } catch (error) {
+        // Fail-closed: reject messages when tenant lookup fails in multi-tenant mode
+        if (error instanceof TenantLookupError) {
+          logger.error('Tenant lookup failed, rejecting messages (fail-closed)', {
+            tenantId,
+            error: error.message,
+          });
+          invalidMessages.push(...messages.map(({ messageId }) => messageId));
+          continue;
+        }
+        // Re-throw unexpected errors
+        throw error;
+      }
+    }
+
     const instances = await createRunners(
       {
         ephemeral: ephemeralEnabled,
@@ -412,7 +494,7 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
         runnerLabels,
         runnerGroup,
         runnerNamePrefix,
-        runnerOwner: group,
+        runnerOwner: actualOwner,
         runnerType,
         disableAutoUpdate,
         ssmTokenPath,
@@ -431,6 +513,8 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
         amiIdSsmParameterName,
         tracingEnabled,
         onDemandFailoverOnError,
+        tenantId,
+        tenantTier,
       },
       newRunners,
       githubInstallationClient,
