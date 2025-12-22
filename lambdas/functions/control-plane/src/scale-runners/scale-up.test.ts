@@ -10,7 +10,7 @@ import { createRunner, listEC2Runners, countRunnersByTenant } from './../aws/run
 import { RunnerInputParameters } from './../aws/runners.d';
 import * as scaleUpModule from './scale-up';
 import { getParameter } from '@aws-github-runner/aws-ssm-util';
-import { getTenantConfig, clearTenantCache, TenantLookupError } from './tenant';
+import { getTenantConfig, TenantLookupError } from './tenant';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Octokit } from '@octokit/rest';
 

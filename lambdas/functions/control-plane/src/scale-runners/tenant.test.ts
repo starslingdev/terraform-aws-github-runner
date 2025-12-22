@@ -138,6 +138,7 @@ describe('getTenantConfig', () => {
 
     it('should refetch from DynamoDB after cache TTL expires', async () => {
       vi.useFakeTimers();
+      vi.setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
       mockDocClient.on(GetCommand).resolves({ Item: sampleTenant });
 
       await getTenantConfig('12345');
@@ -170,13 +171,15 @@ describe('getTenantConfig', () => {
     });
 
     it('should delete cache entry when tenant not found', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
+
       // First, cache a valid tenant
       mockDocClient.on(GetCommand).resolvesOnce({ Item: sampleTenant });
       await getTenantConfig('12345');
       expect(mockDocClient.commandCalls(GetCommand)).toHaveLength(1);
 
       // Advance past cache TTL
-      vi.useFakeTimers();
       vi.advanceTimersByTime(60001);
 
       // Tenant no longer exists

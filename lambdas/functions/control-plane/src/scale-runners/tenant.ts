@@ -1,7 +1,11 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
-import { getTracedAWSV3Client, createChildLogger } from '@aws-github-runner/aws-powertools-util';
-import { TenantConfig, TenantStatus, TenantTier } from '@aws-github-runner/tenant-registry';
+import { createChildLogger } from '@aws-github-runner/aws-powertools-util';
+import {
+  TenantConfig,
+  TenantStatus,
+  TenantTier,
+  getTenantCached,
+  clearTenantCache as clearRegistryCache,
+} from '@aws-github-runner/tenant-registry';
 
 export { TenantConfig, TenantStatus, TenantTier };
 
@@ -20,26 +24,6 @@ export class TenantLookupError extends Error {
     this.name = 'TenantLookupError';
   }
 }
-
-let docClient: DynamoDBDocumentClient | null = null;
-
-function getDocClient(): DynamoDBDocumentClient {
-  if (!docClient) {
-    const client = getTracedAWSV3Client(new DynamoDBClient({ region: process.env.AWS_REGION }));
-    docClient = DynamoDBDocumentClient.from(client, {
-      marshallOptions: {
-        removeUndefinedValues: true,
-      },
-    });
-  }
-  return docClient;
-}
-
-// Cache for tenant lookups (in-memory, per Lambda instance)
-// Key is installation_id (number) for type consistency with DynamoDB
-const tenantCache = new Map<number, { tenant: TenantConfig; expiry: number }>();
-const CACHE_TTL_MS = 60000; // 1 minute
-const MAX_CACHE_SIZE = parseInt(process.env.TENANT_CACHE_MAX_SIZE || '1000', 10) || 1000; // Fallback if NaN
 
 let loggedNonMultiTenantMode = false;
 
@@ -77,40 +61,14 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig | 
     throw new TenantLookupError(`Invalid tenant ID format: ${tenantId}`, tenantId);
   }
 
-  // Check cache first
-  const cached = tenantCache.get(installationId);
-  if (cached && cached.expiry > Date.now()) {
-    logger.debug('Tenant cache hit', { tenantId, installationId });
-    return cached.tenant;
-  }
-
   try {
-    const client = getDocClient();
-    const result = await client.send(
-      new GetCommand({
-        TableName: tableName,
-        Key: { installation_id: installationId },
-      }),
-    );
+    // Use the tenant-registry library's cached lookup
+    const tenant = await getTenantCached(installationId);
 
-    if (!result.Item) {
+    if (!tenant) {
       logger.warn('Tenant not found in registry', { tenantId, installationId });
-      tenantCache.delete(installationId);
       throw new TenantLookupError(`Tenant not found: ${tenantId}`, tenantId);
     }
-
-    const tenant = result.Item as TenantConfig;
-
-    // Evict oldest entry if cache is full and this is a new key
-    if (tenantCache.size >= MAX_CACHE_SIZE && !tenantCache.has(installationId)) {
-      const oldestKey = tenantCache.keys().next().value;
-      if (oldestKey !== undefined) tenantCache.delete(oldestKey);
-    }
-
-    tenantCache.set(installationId, {
-      tenant,
-      expiry: Date.now() + CACHE_TTL_MS,
-    });
 
     return tenant;
   } catch (error) {
@@ -128,9 +86,9 @@ export function isMultiTenantMode(): boolean {
   return !!process.env.TENANT_TABLE_NAME;
 }
 
-// For testing purposes - clears the in-memory cache
+// For testing purposes - clears the in-memory cache (delegates to tenant-registry)
 export function clearTenantCache(): void {
-  tenantCache.clear();
+  clearRegistryCache();
 }
 
 // For testing purposes - resets the non-multi-tenant mode log flag

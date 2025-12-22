@@ -249,7 +249,8 @@ export async function getTenantByOrgName(orgName: string): Promise<TenantConfig 
 // Cache for tenant lookups (in-memory, per Lambda instance)
 const tenantCache = new Map<number, { tenant: TenantConfig; expiry: number }>();
 const CACHE_TTL_MS = 60000; // 1 minute
-const MAX_CACHE_SIZE = parseInt(process.env.TENANT_CACHE_MAX_SIZE || '1000', 10) || 1000; // Fallback if NaN
+const parsedCacheSize = parseInt(process.env.TENANT_CACHE_MAX_SIZE || '1000', 10);
+const MAX_CACHE_SIZE = Number.isNaN(parsedCacheSize) || parsedCacheSize < 1 ? 1000 : parsedCacheSize;
 
 export async function getTenantCached(installationId: number): Promise<TenantConfig | null> {
   const cached = tenantCache.get(installationId);

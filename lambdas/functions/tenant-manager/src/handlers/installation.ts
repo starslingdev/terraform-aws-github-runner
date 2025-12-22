@@ -14,10 +14,17 @@ import { InstallationEventDetail } from '../lambda';
 const logger = createChildLogger('installation-handler');
 
 function getDefaultTier(): TenantTier {
-  const envTier = process.env.DEFAULT_TENANT_TIER as TenantTier | undefined;
-  // Validate against TIER_LIMITS to ensure tier exists
-  if (envTier && envTier in TIER_LIMITS) {
-    return envTier;
+  const envTier = process.env.DEFAULT_TENANT_TIER;
+  if (envTier) {
+    // Validate against TIER_LIMITS to ensure tier exists
+    if (envTier in TIER_LIMITS) {
+      return envTier as TenantTier;
+    }
+    logger.warn('Invalid DEFAULT_TENANT_TIER configured, using default', {
+      configured: envTier,
+      validTiers: Object.keys(TIER_LIMITS),
+      fallback: 'small',
+    });
   }
   return 'small';
 }
