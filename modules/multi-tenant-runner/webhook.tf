@@ -24,6 +24,7 @@ module "webhook" {
   log_level     = var.log_level
 
   # Pass tenant table for tenant validation
-  tenant_table_name = aws_dynamodb_table.tenants.name
-  tenant_table_arn  = aws_dynamodb_table.tenants.arn
+  tenant_table_name   = aws_dynamodb_table.tenants.name
+  tenant_table_arn    = aws_dynamodb_table.tenants.arn
+  enable_tenant_table = true
 }

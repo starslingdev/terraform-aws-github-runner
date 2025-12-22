@@ -226,3 +226,9 @@ variable "tenant_table_arn" {
   type        = string
   default     = null
 }
+
+variable "enable_tenant_table" {
+  description = "Enable tenant table IAM policies. Set to true when using multi-tenant configuration."
+  type        = bool
+  default     = false
+}

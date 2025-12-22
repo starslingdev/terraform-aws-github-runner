@@ -19,6 +19,7 @@ node_modules/
 .DS_Store
 *.out
 secrets.auto.tfvars
+terraform.tfvars
 .envrc
 *.zip
 *.gz

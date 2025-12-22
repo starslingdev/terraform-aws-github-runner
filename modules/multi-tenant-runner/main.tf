@@ -31,6 +31,12 @@ resource "random_string" "random" {
   upper   = false
 }
 
+# Service-linked role for EC2 Spot instances (required for spot fleet)
+resource "aws_iam_service_linked_role" "spot" {
+  count            = var.create_service_linked_role_spot ? 1 : 0
+  aws_service_name = "spot.amazonaws.com"
+}
+
 module "ssm" {
   source = "../ssm"
 

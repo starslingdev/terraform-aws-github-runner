@@ -110,18 +110,19 @@ module "runners" {
   enable_ephemeral_runners        = var.enable_ephemeral_runners
   enable_ssm_on_runners           = var.enable_ssm_on_runners
   instance_target_capacity_type   = var.instance_target_capacity_type
-  create_service_linked_role_spot = var.create_service_linked_role_spot && each.key == keys(var.runner_tiers)[0] # Only create once
+  create_service_linked_role_spot = false # Created at multi-tenant-runner level
   scale_down_schedule_expression  = var.scale_down_schedule_expression
 
   # Lambda configuration
-  lambda_zip                = local.runners_lambda_zip
-  lambda_timeout_scale_up   = var.lambda_timeout
-  lambda_timeout_scale_down = var.lambda_timeout
-  logging_retention_in_days = var.logging_retention_in_days
-  logging_kms_key_id        = var.logging_kms_key_id
-  log_level                 = var.log_level
-  kms_key_arn               = var.kms_key_arn
-  aws_partition             = var.aws_partition
+  lambda_zip                              = local.runners_lambda_zip
+  lambda_timeout_scale_up                 = var.lambda_timeout
+  lambda_timeout_scale_down               = var.lambda_timeout
+  logging_retention_in_days               = var.logging_retention_in_days
+  logging_kms_key_id                      = var.logging_kms_key_id
+  log_level                               = var.log_level
+  kms_key_arn                             = var.kms_key_arn
+  aws_partition                           = var.aws_partition
+  scale_up_reserved_concurrent_executions = -1 # Disable reserved concurrency for fresh AWS accounts
 
   # Pass tenant table name to scale-up Lambda for multi-tenant limit enforcement
   tenant_table_name = aws_dynamodb_table.tenants.name

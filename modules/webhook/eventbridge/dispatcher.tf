@@ -147,7 +147,7 @@ resource "aws_iam_role_policy" "dispatcher_xray" {
 }
 
 resource "aws_iam_role_policy" "dispatcher_dynamodb" {
-  count = var.config.tenant_table_name != null && var.config.tenant_table_arn != null ? 1 : 0
+  count = var.config.enable_tenant_table ? 1 : 0
   name  = "dynamodb-tenant-policy"
   role  = aws_iam_role.dispatcher_lambda.name
 

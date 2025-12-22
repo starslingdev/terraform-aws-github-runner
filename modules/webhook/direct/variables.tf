@@ -46,7 +46,8 @@ variable "config" {
       arn     = string
       version = string
     }))
-    tenant_table_name = optional(string)
-    tenant_table_arn  = optional(string)
+    tenant_table_name   = optional(string)
+    tenant_table_arn    = optional(string)
+    enable_tenant_table = optional(bool, false)
   })
 }

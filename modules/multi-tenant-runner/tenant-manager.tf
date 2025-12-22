@@ -122,7 +122,6 @@ resource "aws_lambda_function" "tenant_manager" {
     variables = {
       TENANT_TABLE_NAME           = aws_dynamodb_table.tenants.name
       LOG_LEVEL                   = var.log_level
-      AWS_REGION                  = var.aws_region
       POWERTOOLS_SERVICE_NAME     = "tenant-manager"
       POWERTOOLS_LOGGER_LOG_EVENT = var.log_level == "debug" ? "true" : "false"
       DEFAULT_TENANT_TIER         = var.default_tenant_tier

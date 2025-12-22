@@ -261,49 +261,126 @@ runner_tiers = {
 }
 ```
 
-## Troubleshooting
+## Troubleshooting & Debugging
 
-### Tenant Not Provisioning
+Replace `ENVIRONMENT` with your deployment prefix (e.g., `sling-gh-runner`) and `REGION` with your AWS region in all commands below.
 
-Check the Tenant Manager Lambda logs:
+### Essential Lambda Logs
 
 ```bash
-aws logs tail /aws/lambda/my-saas-tenant-manager --follow
+# Webhook - receives GitHub events
+aws logs tail /aws/lambda/ENVIRONMENT-webhook --region REGION --follow
+
+# Dispatcher - routes events to SQS queues (EventBridge mode)
+aws logs tail /aws/lambda/ENVIRONMENT-dispatch-to-runner --region REGION --follow
+
+# Scale-up - creates EC2 instances (one per tier: small, medium, large)
+aws logs tail /aws/lambda/ENVIRONMENT-small-scale-up --region REGION --follow
+
+# Scale-down - terminates idle runners
+aws logs tail /aws/lambda/ENVIRONMENT-small-scale-down --region REGION --follow
+
+# Tenant Manager - handles app installations
+aws logs tail /aws/lambda/ENVIRONMENT-tenant-manager --region REGION --follow
 ```
 
-### Jobs Not Starting
-
-1. Check webhook Lambda logs:
-   ```bash
-   aws logs tail /aws/lambda/my-saas-webhook --follow
-   ```
-
-2. Verify tenant is active:
-   ```bash
-   aws dynamodb get-item \
-     --table-name my-saas-tenants \
-     --key '{"installation_id": {"N": "YOUR_INSTALLATION_ID"}}'
-   ```
-
-3. Check SQS queue for messages:
-   ```bash
-   aws sqs get-queue-attributes \
-     --queue-url https://sqs.us-east-1.amazonaws.com/123456789/my-saas-small-builds \
-     --attribute-names ApproximateNumberOfMessages
-   ```
-
-### Tenant At Runner Limit
-
-Check current runners:
+### Check Tenant Registration
 
 ```bash
+# List all tenants
+aws dynamodb scan --table-name ENVIRONMENT-tenants --region REGION
+
+# Get specific tenant by installation ID
+aws dynamodb get-item \
+  --table-name ENVIRONMENT-tenants \
+  --key '{"installation_id": {"N": "YOUR_INSTALLATION_ID"}}' \
+  --region REGION
+```
+
+### Check SQS Queues
+
+```bash
+# List queues
+aws sqs list-queues --region REGION | grep ENVIRONMENT
+
+# Check pending messages in a tier queue
+aws sqs get-queue-attributes \
+  --queue-url $(aws sqs get-queue-url --queue-name ENVIRONMENT-small-builds --region REGION --query QueueUrl --output text) \
+  --attribute-names ApproximateNumberOfMessages \
+  --region REGION
+```
+
+### Check Running Instances
+
+```bash
+# List all runner instances
 aws ec2 describe-instances \
-  --filters "Name=tag:ghr:tenant_id,Values=YOUR_INSTALLATION_ID" \
+  --region REGION \
+  --filters "Name=tag:ghr:environment,Values=ENVIRONMENT" \
+  --query 'Reservations[].Instances[].{ID:InstanceId,State:State.Name,Type:InstanceType,Launch:LaunchTime}'
+
+# Check by tier
+aws ec2 describe-instances \
+  --region REGION \
+  --filters "Name=tag:ghr:environment,Values=ENVIRONMENT-small" \
             "Name=instance-state-name,Values=running,pending" \
-  --query 'length(Reservations[].Instances[])'
+  --query 'Reservations[].Instances[].{ID:InstanceId,State:State.Name}'
 ```
 
-Upgrade the tenant tier or wait for runners to complete.
+### Common Issues
+
+#### "Unknown tenant for installation X"
+The tenant is not registered in DynamoDB. Re-install the GitHub App to trigger the installation webhook, or manually add the tenant:
+
+```bash
+aws dynamodb put-item \
+  --table-name ENVIRONMENT-tenants \
+  --region REGION \
+  --item '{
+    "installation_id": {"N": "YOUR_INSTALLATION_ID"},
+    "tier": {"S": "small"},
+    "status": {"S": "active"},
+    "org_name": {"S": "your-org"},
+    "max_runners": {"N": "2"},
+    "created_at": {"S": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"},
+    "updated_at": {"S": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}
+  }'
+```
+
+#### "AuthFailure.ServiceLinkedRoleCreationNotPermitted"
+The EC2 Spot service-linked role doesn't exist. Ensure `create_service_linked_role_spot = true` in your deployment, or create manually:
+
+```bash
+aws iam create-service-linked-role --aws-service-name spot.amazonaws.com
+```
+
+#### Jobs stuck in "Waiting for a runner"
+1. Check dispatcher logs for errors
+2. Verify tenant exists and is active
+3. Check scale-up Lambda logs for EC2 creation errors
+4. Verify the workflow labels match a tier (e.g., `[self-hosted, linux, x64, small]`)
+
+#### Runner starts but job fails immediately
+Check the runner's CloudWatch logs:
+
+```bash
+aws logs tail /aws/lambda/ENVIRONMENT-small-runner --region REGION --since 10m
+```
+
+### Upgrade Tenant Tier
+
+```bash
+aws dynamodb update-item \
+  --table-name ENVIRONMENT-tenants \
+  --region REGION \
+  --key '{"installation_id": {"N": "YOUR_INSTALLATION_ID"}}' \
+  --update-expression "SET tier = :tier, max_runners = :max, updated_at = :now" \
+  --expression-attribute-values '{
+    ":tier": {"S": "medium"},
+    ":max": {"N": "5"},
+    ":now": {"S": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}
+  }'
+```
 
 ## Clean Up
 

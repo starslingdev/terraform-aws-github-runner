@@ -85,8 +85,9 @@ module "direct" {
         version = p.version
       }
     ]
-    tenant_table_name = var.tenant_table_name
-    tenant_table_arn  = var.tenant_table_arn
+    tenant_table_name   = var.tenant_table_name
+    tenant_table_arn    = var.tenant_table_arn
+    enable_tenant_table = var.enable_tenant_table
   }
 }
 
@@ -128,9 +129,10 @@ module "eventbridge" {
         version = p.version
       }
     ]
-    accept_events     = var.eventbridge.accept_events
-    tenant_table_name = var.tenant_table_name
-    tenant_table_arn  = var.tenant_table_arn
+    accept_events       = var.eventbridge.accept_events
+    tenant_table_name   = var.tenant_table_name
+    tenant_table_arn    = var.tenant_table_arn
+    enable_tenant_table = var.enable_tenant_table
   }
 
 }
