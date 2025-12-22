@@ -217,3 +217,13 @@ variable "scale_down_schedule_expression" {
   type        = string
   default     = "cron(*/5 * * * ? *)"
 }
+
+variable "default_tenant_tier" {
+  description = "Default tier for new tenants when they install the GitHub App"
+  type        = string
+  default     = "small"
+  validation {
+    condition     = contains(["small", "medium", "large"], var.default_tenant_tier)
+    error_message = "Valid values are 'small', 'medium', or 'large'."
+  }
+}

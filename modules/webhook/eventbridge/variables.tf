@@ -48,5 +48,6 @@ variable "config" {
     }))
     accept_events     = optional(list(string), null)
     tenant_table_name = optional(string)
+    tenant_table_arn  = optional(string)
   })
 }

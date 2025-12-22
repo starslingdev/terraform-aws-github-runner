@@ -40,12 +40,21 @@ function getDocClient(): DynamoDBDocumentClient {
 // Cache for tenant lookups (in-memory, per Lambda instance)
 const tenantCache = new Map<string, { tenant: TenantConfig; expiry: number }>();
 const CACHE_TTL_MS = 60000; // 1 minute
-const MAX_CACHE_SIZE = 1000; // Prevent unbounded cache growth
+const MAX_CACHE_SIZE = parseInt(process.env.TENANT_CACHE_MAX_SIZE || '1000', 10) || 1000; // Fallback if NaN
+
+let loggedNonMultiTenantMode = false;
 
 export async function getTenantConfig(tenantId: string): Promise<TenantConfig | null> {
   // Skip tenant lookup if not in multi-tenant mode
   const tableName = process.env.TENANT_TABLE_NAME;
-  if (!tableName || !tenantId) {
+  if (!tableName) {
+    if (!loggedNonMultiTenantMode) {
+      logger.debug('Running in non-multi-tenant mode (TENANT_TABLE_NAME not set)');
+      loggedNonMultiTenantMode = true;
+    }
+    return null;
+  }
+  if (!tenantId) {
     return null;
   }
 

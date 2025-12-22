@@ -148,3 +148,26 @@ resource "aws_iam_role_policy" "xray" {
   policy = data.aws_iam_policy_document.lambda_xray[0].json
   role   = aws_iam_role.webhook_lambda.name
 }
+
+resource "aws_iam_role_policy" "webhook_dynamodb" {
+  count = var.config.tenant_table_name != null ? 1 : 0
+  name  = "dynamodb-tenant-policy"
+  role  = aws_iam_role.webhook_lambda.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          var.config.tenant_table_arn,
+          "${var.config.tenant_table_arn}/index/*"
+        ]
+      }
+    ]
+  })
+}

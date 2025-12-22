@@ -47,5 +47,6 @@ variable "config" {
       version = string
     }))
     tenant_table_name = optional(string)
+    tenant_table_arn  = optional(string)
   })
 }

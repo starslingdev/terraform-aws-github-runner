@@ -86,6 +86,7 @@ module "direct" {
       }
     ]
     tenant_table_name = var.tenant_table_name
+    tenant_table_arn  = var.tenant_table_arn
   }
 }
 
@@ -129,6 +130,7 @@ module "eventbridge" {
     ]
     accept_events     = var.eventbridge.accept_events
     tenant_table_name = var.tenant_table_name
+    tenant_table_arn  = var.tenant_table_arn
   }
 
 }

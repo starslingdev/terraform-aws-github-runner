@@ -1,10 +1,26 @@
 import { createChildLogger } from '@aws-github-runner/aws-powertools-util';
-import { createTenant, updateTenant, invalidateTenantCache, TenantConfig } from '@aws-github-runner/tenant-registry';
+import {
+  createTenant,
+  updateTenant,
+  invalidateTenantCache,
+  TenantConfig,
+  TenantTier,
+  TIER_LIMITS,
+} from '@aws-github-runner/tenant-registry';
 import { EC2Client, DescribeInstancesCommand, TerminateInstancesCommand } from '@aws-sdk/client-ec2';
 import { getTracedAWSV3Client } from '@aws-github-runner/aws-powertools-util';
 import { InstallationEventDetail } from '../lambda';
 
 const logger = createChildLogger('installation-handler');
+
+function getDefaultTier(): TenantTier {
+  const envTier = process.env.DEFAULT_TENANT_TIER as TenantTier | undefined;
+  // Validate against TIER_LIMITS to ensure tier exists
+  if (envTier && envTier in TIER_LIMITS) {
+    return envTier;
+  }
+  return 'small';
+}
 
 export async function handleInstallation(event: InstallationEventDetail): Promise<void> {
   const { action, installation, sender } = event;
@@ -41,7 +57,7 @@ async function handleInstallationCreated(
     installation_id: installation.id,
     org_name: installation.account.login,
     org_type: installation.account.type,
-    tier: 'small', // Default tier for new installations
+    tier: getDefaultTier(),
     metadata: {
       github_account_id: installation.account.id,
       sender_login: sender.login,

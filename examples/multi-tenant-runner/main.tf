@@ -78,25 +78,3 @@ module "runners" {
     Environment = local.environment
   }
 }
-
-# Output the webhook endpoint for GitHub App configuration
-output "webhook_endpoint" {
-  value = module.runners.webhook.endpoint
-}
-
-output "tenant_table" {
-  value = module.runners.tenant_table
-}
-
-output "runner_tiers" {
-  value = module.runners.runner_tiers
-}
-
-output "queues" {
-  value = module.runners.queues
-}
-
-output "webhook_secret" {
-  value     = random_id.random.hex
-  sensitive = true
-}

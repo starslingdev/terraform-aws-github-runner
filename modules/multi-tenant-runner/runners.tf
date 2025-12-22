@@ -98,11 +98,12 @@ module "runners" {
   }
 
   # Runner configuration from tier definition
-  runner_os             = each.value.runner_os
-  runner_architecture   = each.value.runner_architecture
-  instance_types        = each.value.instance_types
-  runner_labels         = each.value.labels
-  runners_maximum_count = each.value.max_runners
+  runner_os           = each.value.runner_os
+  runner_architecture = each.value.runner_architecture
+  instance_types      = each.value.instance_types
+  runner_labels       = each.value.labels
+  # Per-tenant limits are enforced in scale-up Lambda; no global tier limit
+  runners_maximum_count = -1
 
   # Common runner settings
   enable_organization_runners     = true # Multi-tenant always uses org-level runners

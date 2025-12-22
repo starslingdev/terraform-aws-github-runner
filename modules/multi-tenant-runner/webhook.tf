@@ -23,6 +23,7 @@ module "webhook" {
   aws_partition = var.aws_partition
   log_level     = var.log_level
 
-  # Pass tenant table name for tenant validation
+  # Pass tenant table for tenant validation
   tenant_table_name = aws_dynamodb_table.tenants.name
+  tenant_table_arn  = aws_dynamodb_table.tenants.arn
 }

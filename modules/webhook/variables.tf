@@ -220,3 +220,9 @@ variable "tenant_table_name" {
   type        = string
   default     = null
 }
+
+variable "tenant_table_arn" {
+  description = "DynamoDB table ARN for multi-tenant configuration. Required for IAM policies when tenant_table_name is set."
+  type        = string
+  default     = null
+}

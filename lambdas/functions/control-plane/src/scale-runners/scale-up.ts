@@ -374,19 +374,25 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
       continue;
     }
 
+    // Get tenant info from first message BEFORE any array mutations
+    // All messages in a group have the same tenant (enforced by grouping key including tenantId)
+    const tenantId = messages[0]?.tenantId;
+    const tenantTier = messages[0]?.tenantTier;
+
+    // Extract actual owner from messages - the grouping key may contain tenant suffix
+    // Use this for GitHub API calls and EC2 tagging, not the grouping key
+    const actualOwner = enableOrgLevel
+      ? messages[0].repositoryOwner
+      : `${messages[0].repositoryOwner}/${messages[0].repositoryName}`;
+
     // Don't call the EC2 API if we can create an unlimited number of runners.
     const currentRunners =
-      maximumRunners === -1 ? 0 : (await listEC2Runners({ environment, runnerType, runnerOwner: group })).length;
+      maximumRunners === -1 ? 0 : (await listEC2Runners({ environment, runnerType, runnerOwner: actualOwner })).length;
 
     logger.info('Current runners', {
       currentRunners,
       maximumRunners,
     });
-
-    // Get tenant info from first message BEFORE any array mutations
-    // All messages in a group have the same tenant (enforced by grouping key including tenantId)
-    const tenantId = messages[0]?.tenantId;
-    const tenantTier = messages[0]?.tenantTier;
 
     // Calculate how many runners we want to create.
     let newRunners =
@@ -461,7 +467,7 @@ export async function scaleUp(payloads: ActionRequestMessageSQS[]): Promise<stri
         runnerLabels,
         runnerGroup,
         runnerNamePrefix,
-        runnerOwner: group,
+        runnerOwner: actualOwner,
         runnerType,
         disableAutoUpdate,
         ssmTokenPath,

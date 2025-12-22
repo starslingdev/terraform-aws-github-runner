@@ -224,6 +224,25 @@ runner_tiers = {
 }
 ```
 
+> **Note:** The `max_runners` value defines the per-tenant limit for each tier. When using custom tier names (not `small`, `medium`, `large`), you must update:
+> 1. `TenantTier` type in `lambdas/libs/tenant-registry/src/index.ts`
+> 2. `TIER_LIMITS` constant in the same file
+> 3. `default_tenant_tier` validation in `modules/multi-tenant-runner/variables.tf`
+
+### Default Tenant Tier
+
+New tenants are assigned a default tier when they install the GitHub App. Configure this with:
+
+```hcl
+module "runners" {
+  # ... other configuration ...
+
+  default_tenant_tier = "starter"  # Must match one of your tier names
+}
+```
+
+If not specified, new tenants default to "small" tier.
+
 ### ARM64 Runners
 
 Add ARM64 tiers:

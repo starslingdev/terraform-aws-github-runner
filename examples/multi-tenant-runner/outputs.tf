@@ -5,7 +5,7 @@ output "webhook_endpoint" {
 
 output "webhook_secret" {
   description = "Webhook secret for GitHub App configuration"
-  value       = module.runners.webhook.secret
+  value       = random_id.random.hex
   sensitive   = true
 }
 

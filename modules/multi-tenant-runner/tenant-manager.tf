@@ -125,6 +125,7 @@ resource "aws_lambda_function" "tenant_manager" {
       AWS_REGION                  = var.aws_region
       POWERTOOLS_SERVICE_NAME     = "tenant-manager"
       POWERTOOLS_LOGGER_LOG_EVENT = var.log_level == "debug" ? "true" : "false"
+      DEFAULT_TENANT_TIER         = var.default_tenant_tier
     }
   }
 
