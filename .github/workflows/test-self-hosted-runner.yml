@@ -1,0 +1,22 @@
+name: Test Self-Hosted Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-small:
+    runs-on: [self-hosted, linux, x64, small]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: System Info
+        run: |
+          echo "Runner: $RUNNER_NAME"
+          echo "OS: $(uname -a)"
+          echo "Instance type: $(curl -s http://169.254.169.254/latest/meta-data/instance-type || echo 'N/A')"
+          echo "CPU cores: $(nproc)"
+          echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+
+      - name: Test Complete
+        run: echo "Self-hosted runner is working!"
