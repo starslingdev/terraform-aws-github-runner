@@ -15,17 +15,17 @@ INSTALL_START_TIME=$(date +%s.%N)
 log_json() {
   local phase="$1"
   local duration="$2"
-  local status="${3:-ok}"
-  local extra="${4:-}"
+  local status="$${3:-ok}"
+  local extra="$${4:-}"
 
   local base
   base=$(printf '{"ts":"%s","phase":"%s","duration_s":%s,"status":"%s"' \
     "$(date -Iseconds)" "$phase" "$duration" "$status")
 
   if [[ -n "$extra" ]]; then
-    echo "${base},${extra}}"
+    echo "$${base},$${extra}}"
   else
-    echo "${base}}"
+    echo "$${base}}"
   fi
 }
 

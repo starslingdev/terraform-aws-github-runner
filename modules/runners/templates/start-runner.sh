@@ -23,17 +23,17 @@ XRAY_SEGMENT_DOC=""
 log_json() {
   local phase="$1"
   local duration="$2"
-  local status="${3:-ok}"
-  local extra="${4:-}"
+  local status="$${3:-ok}"
+  local extra="$${4:-}"
 
   local base
   base=$(printf '{"ts":"%s","phase":"%s","duration_s":%s,"status":"%s","instance_id":"%s","env":"%s"' \
-    "$(date -Iseconds)" "$phase" "$duration" "$status" "${instance_id:-unknown}" "${environment:-unknown}")
+    "$(date -Iseconds)" "$phase" "$duration" "$status" "$${instance_id:-unknown}" "$${environment:-unknown}")
 
   if [[ -n "$extra" ]]; then
-    echo "${base},${extra}}"
+    echo "$${base},$${extra}}"
   else
-    echo "${base}}"
+    echo "$${base}}"
   fi
 }
 
@@ -123,7 +123,7 @@ collect_metric() {
 # emit_all_metrics - Emit all collected metrics in a single CloudWatch API call
 # -----------------------------------------------------------------------------
 emit_all_metrics() {
-  [[ ${#BOOT_METRICS[@]} -eq 0 ]] && return
+  [[ $${#BOOT_METRICS[@]} -eq 0 ]] && return
   [[ -z "$region" || "$region" == "unknown" ]] && return
 
   local metric_start metric_end metric_duration
@@ -132,10 +132,10 @@ emit_all_metrics() {
   # Build metric data JSON array
   local metric_data="["
   local first=true
-  for name in "${!BOOT_METRICS[@]}"; do
+  for name in "$${!BOOT_METRICS[@]}"; do
     [[ "$first" != "true" ]] && metric_data+=","
     first=false
-    metric_data+="{\"MetricName\":\"$name\",\"Value\":${BOOT_METRICS[$name]},\"Unit\":\"Seconds\",\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance_id\"},{\"Name\":\"Environment\",\"Value\":\"$environment\"}]}"
+    metric_data+="{\"MetricName\":\"$name\",\"Value\":$${BOOT_METRICS[$name]},\"Unit\":\"Seconds\",\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance_id\"},{\"Name\":\"Environment\",\"Value\":\"$environment\"}]}"
   done
   metric_data+="]"
 
@@ -147,7 +147,7 @@ emit_all_metrics() {
 
   metric_end=$(date +%s.%N)
   metric_duration=$(echo "$metric_end - $metric_start" | bc)
-  log_json "metrics_emission" "$metric_duration" "ok" "\"metric_count\":${#BOOT_METRICS[@]}"
+  log_json "metrics_emission" "$metric_duration" "ok" "\"metric_count\":$${#BOOT_METRICS[@]}"
 }
 
 # -----------------------------------------------------------------------------
