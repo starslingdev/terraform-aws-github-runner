@@ -15,15 +15,16 @@ locals {
     }
   ])
 
-  unique_os_arch_map = {
+  # Only create the OS/arch map when syncer is enabled
+  unique_os_arch_map = var.enable_runner_binaries_syncer ? {
     for item in local.unique_os_arch : item.key => item
-  }
+  } : {}
 
   # Lambda zip paths
   runners_lambda_zip                = var.runners_lambda_zip == null ? "${path.module}/../../lambdas/functions/control-plane/runners.zip" : var.runners_lambda_zip
   runner_binaries_syncer_lambda_zip = var.runner_binaries_syncer_lambda_zip == null ? "${path.module}/../../lambdas/functions/gh-agent-syncer/runner-binaries-syncer.zip" : var.runner_binaries_syncer_lambda_zip
 
-  # Map runner binaries by OS and architecture
+  # Map runner binaries by OS and architecture (empty when syncer is disabled)
   runner_binaries_by_os_arch = {
     for k, v in module.runner_binaries : k => {
       arn = v.bucket.arn
@@ -75,8 +76,9 @@ module "runners" {
     url = aws_sqs_queue.tier_builds[each.key].url
   }
 
-  # Runner binaries from syncer
-  s3_runner_binaries = local.runner_binaries_by_os_arch["${each.value.runner_os}-${each.value.runner_architecture}"]
+  # Runner binaries from syncer (null when using pre-baked AMI)
+  enable_runner_binaries_syncer = var.enable_runner_binaries_syncer
+  s3_runner_binaries            = var.enable_runner_binaries_syncer ? local.runner_binaries_by_os_arch["${each.value.runner_os}-${each.value.runner_architecture}"] : null
 
   # SSM paths for this tier
   ssm_paths = {

@@ -16,6 +16,8 @@ resource "random_id" "random" {
   byte_length = 20
 }
 
+data "aws_caller_identity" "current" {}
+
 module "base" {
   source = "../base"
 
@@ -73,15 +75,14 @@ module "runners" {
   # Create the service-linked role for spot instances (first deployment only)
   create_service_linked_role_spot = true
 
-  # OPTIONAL: Pre-baked AMI configuration for faster boot times (~60-90s savings)
-  # Build the AMI using: packer build images/linux-al2023/github_agent.linux.pkr.hcl
-  # Then uncomment the following lines:
-  #
-  # ami = {
-  #   filter = { name = ["github-runner-al2023-x86_64-*"], state = ["available"] }
-  #   owners = [data.aws_caller_identity.current.account_id]
-  # }
-  # enable_userdata = false  # Skip user-data since AMI is pre-baked
+  # Pre-baked AMI configuration for faster boot times (~86s savings)
+  # Build the AMI first: cd images/linux-al2023 && packer build github_agent.linux.pkr.hcl
+  ami = {
+    filter = { name = ["github-runner-al2023-x86_64-*"], state = ["available"] }
+    owners = [data.aws_caller_identity.current.account_id]
+  }
+  enable_userdata               = false # Skip user-data since AMI is pre-baked
+  enable_runner_binaries_syncer = false # Runner is pre-installed in AMI
 
   tags = {
     Project     = "multi-tenant-runners"

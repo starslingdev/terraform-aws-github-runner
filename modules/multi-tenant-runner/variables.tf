@@ -273,3 +273,13 @@ variable "enable_userdata" {
   type        = bool
   default     = true
 }
+
+variable "enable_runner_binaries_syncer" {
+  description = <<-EOT
+    Enable the runner binaries syncer Lambda that downloads GitHub runner binaries to S3.
+    Set to false when using a pre-baked AMI with the runner already installed.
+    When disabled, no S3 bucket for runner distribution is created.
+  EOT
+  type        = bool
+  default     = true
+}
